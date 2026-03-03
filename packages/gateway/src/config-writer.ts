@@ -13,71 +13,50 @@ import {
   resolveOpenClawConfigPath as _resolveOpenClawConfigPath,
 } from "@easyclaw/core/node";
 import { generateAudioConfig, mergeAudioConfig } from "./audio-config-writer.js";
+import { OpenClawSchema } from "../../../vendor/openclaw/src/config/zod-schema.js";
 
 const log = createLogger("gateway:config");
 
 /**
- * Top-level keys recognised by the OpenClaw config schema (zod-schema.ts).
- * Any key NOT in this set will be stripped before we write the config file,
- * preventing third-party plugins or stale migrations from injecting unknown
- * fields that cause "Config invalid – Unrecognized key" on gateway startup.
- *
- * Keep in sync with vendor/openclaw/src/config/zod-schema.ts when updating
- * the vendor (the update-vendor skill should flag schema changes).
+ * Strip keys that the OpenClaw Zod schema does not recognise at any nesting
+ * level.  Uses `OpenClawSchema.safeParse()` to detect `unrecognized_keys`
+ * issues, navigates to the parent object via the issue path, and deletes the
+ * offending keys.  Returns dot-joined paths of all removed keys for logging.
  */
-export const KNOWN_CONFIG_KEYS: ReadonlySet<string> = new Set([
-  "$schema",
-  "meta",
-  "env",
-  "wizard",
-  "diagnostics",
-  "logging",
-  "update",
-  "browser",
-  "ui",
-  "auth",
-  "models",
-  "nodeHost",
-  "agents",
-  "tools",
-  "bindings",
-  "broadcast",
-  "audio",
-  "media",
-  "messages",
-  "commands",
-  "approvals",
-  "session",
-  "cron",
-  "hooks",
-  "web",
-  "channels",
-  "discovery",
-  "canvasHost",
-  "talk",
-  "gateway",
-  "memory",
-  "skills",
-  "plugins",
-  "secrets",
-  "acp",
-]);
+function stripUnknownKeys(config: Record<string, unknown>): string[] {
+  const allRemoved: string[] = [];
 
-/**
- * Remove top-level keys that the OpenClaw schema does not recognise.
- * Returns the list of removed keys (for logging).
- */
-function stripUnknownTopLevelKeys(
-  config: Record<string, unknown>,
-): string[] {
-  const removed: string[] = [];
-  for (const key of Object.keys(config)) {
-    if (!KNOWN_CONFIG_KEYS.has(key)) {
-      delete config[key];
-      removed.push(key);
+  for (let pass = 0; pass < 10; pass++) {
+    const result = OpenClawSchema.safeParse(config);
+    if (result.success) break;
+
+    let found = false;
+    for (const issue of result.error.issues) {
+      if (issue.code !== "unrecognized_keys") continue;
+
+      // Walk the path to reach the object containing the bad keys.
+      let target: unknown = config;
+      for (const segment of issue.path) {
+        if (target == null || typeof target !== "object") {
+          target = null;
+          break;
+        }
+        target = (target as Record<PropertyKey, unknown>)[segment];
+      }
+
+      if (target != null && typeof target === "object" && !Array.isArray(target)) {
+        for (const key of issue.keys) {
+          delete (target as Record<string, unknown>)[key];
+          allRemoved.push([...issue.path, key].join("."));
+          found = true;
+        }
+      }
     }
+
+    if (!found) break;
   }
-  return removed;
+
+  return allRemoved;
 }
 
 /**
@@ -805,10 +784,11 @@ export function writeGatewayConfig(options: WriteGatewayConfigOptions): string {
     }
   }
 
-  // Strip unknown top-level keys before writing so that stale entries
-  // injected by third-party plugins or manual edits don't cause
-  // "Config invalid – Unrecognized key" on gateway startup.
-  const removedKeys = stripUnknownTopLevelKeys(config);
+  // Strip keys unrecognised by the OpenClaw schema (at any nesting level)
+  // so that stale entries injected by third-party plugins, manual edits, or
+  // old migrations don't cause "Config invalid – Unrecognized key" on
+  // gateway startup.
+  const removedKeys = stripUnknownKeys(config);
   if (removedKeys.length > 0) {
     log.warn(`Stripped unknown config keys: ${removedKeys.join(", ")}`);
   }

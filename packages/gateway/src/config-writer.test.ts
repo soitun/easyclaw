@@ -11,7 +11,6 @@ import {
   generateGatewayToken,
   buildExtraProviderConfigs,
   DEFAULT_GATEWAY_PORT,
-  KNOWN_CONFIG_KEYS,
 } from "./config-writer.js";
 
 describe("config-writer", () => {
@@ -178,7 +177,7 @@ describe("config-writer", () => {
         configPath,
         JSON.stringify({
           logging: { level: "debug" },
-          gateway: { port: 1234, customField: "also-keep" },
+          gateway: { port: 1234, mode: "single" },
           ui: { seamColor: "#ff0000" },
         }),
       );
@@ -197,7 +196,7 @@ describe("config-writer", () => {
       // Known user fields are preserved
       expect(config.logging).toEqual({ level: "debug" });
       expect(config.ui).toEqual({ seamColor: "#ff0000" });
-      expect(config.gateway.customField).toBe("also-keep");
+      expect(config.gateway.mode).toBe("single");
     });
 
     it("preserves existing skills fields when adding extraDirs", () => {
@@ -206,9 +205,9 @@ describe("config-writer", () => {
         configPath,
         JSON.stringify({
           skills: {
-            someOtherProp: "keep",
+            allowBundled: true,
             load: {
-              existingProp: "also-keep",
+              watch: true,
             },
           },
         }),
@@ -220,8 +219,8 @@ describe("config-writer", () => {
       });
 
       const config = JSON.parse(readFileSync(configPath, "utf-8"));
-      expect(config.skills.someOtherProp).toBe("keep");
-      expect(config.skills.load.existingProp).toBe("also-keep");
+      expect(config.skills.allowBundled).toBe(true);
+      expect(config.skills.load.watch).toBe(true);
       expect(config.skills.load.extraDirs).toEqual(["/new/dir"]);
     });
 
@@ -419,7 +418,7 @@ describe("config-writer", () => {
       const configPath = join(tmpDir, "openclaw.json");
       writeFileSync(
         configPath,
-        JSON.stringify({ commands: { other: "value" } }),
+        JSON.stringify({ commands: { native: true } }),
       );
 
       writeGatewayConfig({
@@ -429,7 +428,7 @@ describe("config-writer", () => {
 
       const config = JSON.parse(readFileSync(configPath, "utf-8"));
       expect(config.commands.restart).toBe(true);
-      expect(config.commands.other).toBe("value");
+      expect(config.commands.native).toBe(true);
     });
   });
 
@@ -654,7 +653,7 @@ describe("config-writer", () => {
         JSON.stringify({
           gateway: {
             port: 1234,
-            auth: { mode: "token", token: "old", customField: "keep" },
+            auth: { mode: "token", token: "old", password: "keep" },
           },
         }),
       );
@@ -667,7 +666,7 @@ describe("config-writer", () => {
       const config = JSON.parse(readFileSync(configPath, "utf-8"));
       expect(config.gateway.port).toBe(1234);
       expect(config.gateway.auth.token).toBe("new-token");
-      expect(config.gateway.auth.customField).toBe("keep");
+      expect(config.gateway.auth.password).toBe("keep");
     });
   });
 
@@ -850,20 +849,95 @@ describe("config-writer", () => {
     });
   });
 
-  describe("KNOWN_CONFIG_KEYS sync with vendor schema", () => {
-    it("matches the top-level keys of OpenClawSchema", async () => {
-      // Import the Zod schema directly from vendor source so the test
-      // breaks if vendor/openclaw adds or removes top-level config keys.
-      const { OpenClawSchema } = await import(
-        "../../../vendor/openclaw/src/config/zod-schema.js"
+  describe("writeGatewayConfig - nested unknown key sanitisation", () => {
+    it("strips unrecognised nested keys inside a channel config", () => {
+      const configPath = join(tmpDir, "openclaw.json");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          channels: {
+            telegram: {
+              botToken: "123:ABC",
+              retryAttempts: 3,
+              retryDelayMs: 1000,
+              usePolling: true,
+            },
+          },
+        }),
       );
-      const schemaKeys = new Set(Object.keys(OpenClawSchema.shape));
 
-      const missingFromKnown = [...schemaKeys].filter((k) => !KNOWN_CONFIG_KEYS.has(k));
-      const extraInKnown = [...KNOWN_CONFIG_KEYS].filter((k) => !schemaKeys.has(k));
+      writeGatewayConfig({ configPath, gatewayPort: 18789 });
 
-      expect(missingFromKnown, "Keys in vendor schema but missing from KNOWN_CONFIG_KEYS").toEqual([]);
-      expect(extraInKnown, "Keys in KNOWN_CONFIG_KEYS but not in vendor schema").toEqual([]);
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(config.channels.telegram.botToken).toBe("123:ABC");
+      expect(config.channels.telegram.retryAttempts).toBeUndefined();
+      expect(config.channels.telegram.retryDelayMs).toBeUndefined();
+      expect(config.channels.telegram.usePolling).toBeUndefined();
+    });
+
+    it("strips deeply nested unrecognised keys", () => {
+      const configPath = join(tmpDir, "openclaw.json");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          gateway: {
+            port: 9999,
+            auth: {
+              mode: "token",
+              bogusKey: true,
+            },
+          },
+        }),
+      );
+
+      writeGatewayConfig({ configPath, gatewayPort: 18789 });
+
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(config.gateway.auth.mode).toBe("token");
+      expect(config.gateway.auth.bogusKey).toBeUndefined();
+    });
+
+    it("strips unknown keys at both top-level and nested levels", () => {
+      const configPath = join(tmpDir, "openclaw.json");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          topLevelJunk: true,
+          gateway: {
+            port: 9999,
+            nestedJunk: "remove me",
+          },
+        }),
+      );
+
+      writeGatewayConfig({ configPath, gatewayPort: 18789 });
+
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(config.topLevelJunk).toBeUndefined();
+      expect(config.gateway.nestedJunk).toBeUndefined();
+      expect(config.gateway.port).toBe(18789);
+    });
+
+    it("preserves valid nested keys", () => {
+      const configPath = join(tmpDir, "openclaw.json");
+      writeFileSync(
+        configPath,
+        JSON.stringify({
+          channels: {
+            telegram: { botToken: "123:ABC", dmPolicy: "open" },
+            discord: { token: "discord-tok" },
+          },
+          gateway: { port: 7777, auth: { mode: "none" } },
+        }),
+      );
+
+      writeGatewayConfig({ configPath, gatewayPort: 18789 });
+
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+      expect(config.channels.telegram.botToken).toBe("123:ABC");
+      expect(config.channels.telegram.dmPolicy).toBe("open");
+      expect(config.channels.discord.token).toBe("discord-tok");
+      expect(config.gateway.auth.mode).toBe("none");
     });
   });
 
