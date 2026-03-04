@@ -841,6 +841,21 @@ export function writeGatewayConfig(options: WriteGatewayConfigOptions): string {
     }
   }
 
+  // Session reset policy — EasyClaw is a desktop app; users expect chat
+  // history to persist across days.  Override OpenClaw's default "daily"
+  // reset (which clears context at 04:00 local time) with a long idle
+  // timeout so sessions only reset after extended inactivity.
+  {
+    const existingSession =
+      typeof config.session === "object" && config.session !== null
+        ? (config.session as Record<string, unknown>)
+        : {};
+    config.session = {
+      ...existingSession,
+      reset: { mode: "idle", idleMinutes: 43200 },
+    };
+  }
+
   // Sanitize Windows-style paths in Docker bind mounts.
   // OpenClaw's Zod schema uses naive indexOf(":") which splits on the
   // drive-letter colon (e.g. "E:\OpenClaw" → source "E").
