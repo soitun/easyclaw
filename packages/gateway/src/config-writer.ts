@@ -13,6 +13,7 @@ import {
   resolveOpenClawConfigPath as _resolveOpenClawConfigPath,
 } from "@easyclaw/core/node";
 import { generateAudioConfig, mergeAudioConfig } from "./audio-config-writer.js";
+import { sanitizeWindowsBinds } from "./windows-bind-sanitizer.js";
 import { OpenClawSchema } from "../../../vendor/openclaw/src/config/zod-schema.js";
 
 const log = createLogger("gateway:config");
@@ -837,6 +838,23 @@ export function writeGatewayConfig(options: WriteGatewayConfigOptions): string {
           chrome: { driver: "clawd", cdpPort: (options.gatewayPort ?? DEFAULT_GATEWAY_PORT) + CDP_PORT_OFFSET, color: "#00AA00" },
         },
       };
+    }
+  }
+
+  // Sanitize Windows-style paths in Docker bind mounts.
+  // OpenClaw's Zod schema uses naive indexOf(":") which splits on the
+  // drive-letter colon (e.g. "E:\OpenClaw" → source "E").
+  // Convert to POSIX format before validation.
+  {
+    const agents = config.agents as Record<string, unknown> | undefined;
+    const defaults = agents?.defaults as Record<string, unknown> | undefined;
+    const sandbox = defaults?.sandbox as Record<string, unknown> | undefined;
+    const docker = sandbox?.docker as Record<string, unknown> | undefined;
+    if (docker?.binds) {
+      const sanitized = sanitizeWindowsBinds(docker.binds);
+      if (sanitized) {
+        docker.binds = sanitized;
+      }
     }
   }
 

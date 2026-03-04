@@ -182,6 +182,48 @@ describe("permissions-writer", () => {
       expect(config.plugins["test-plugin"]).toEqual({});
     });
 
+    it("should convert Windows paths to POSIX format", () => {
+      writeFileSync(configPath, JSON.stringify({}, null, 2), "utf-8");
+
+      syncPermissions(
+        {
+          readPaths: ["E:\\OpenClaw"],
+          writePaths: ["D:\\"],
+        },
+        configPath,
+      );
+
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+      expect(config.agents.defaults.sandbox.docker.binds).toEqual([
+        "/e/OpenClaw:/e/OpenClaw:ro",
+        "/d:/d:rw",
+      ]);
+    });
+
+    it("should deduplicate Windows paths correctly (same drive, different dirs)", () => {
+      writeFileSync(configPath, JSON.stringify({}, null, 2), "utf-8");
+
+      syncPermissions(
+        {
+          readPaths: ["E:\\Docs", "E:\\Projects"],
+          writePaths: ["E:\\Projects"],
+        },
+        configPath,
+      );
+
+      const config = JSON.parse(readFileSync(configPath, "utf-8"));
+
+      // E:\Projects should be rw (writePaths wins), E:\Docs stays ro
+      expect(config.agents.defaults.sandbox.docker.binds).toEqual(
+        expect.arrayContaining([
+          "/e/Docs:/e/Docs:ro",
+          "/e/Projects:/e/Projects:rw",
+        ]),
+      );
+      expect(config.agents.defaults.sandbox.docker.binds).toHaveLength(2);
+    });
+
     it("should handle empty permissions (create empty binds array)", () => {
       writeFileSync(configPath, JSON.stringify({}, null, 2), "utf-8");
 

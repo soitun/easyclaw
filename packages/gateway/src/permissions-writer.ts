@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { createLogger } from "@easyclaw/logger";
 import { resolveOpenClawConfigPath, readExistingConfig } from "./config-writer.js";
+import { windowsPathToPosix } from "./windows-bind-sanitizer.js";
 
 const log = createLogger("gateway:permissions");
 
@@ -19,29 +20,23 @@ export interface PermissionsConfig {
  * Container paths mirror host paths for simplicity (e.g., /home/user/docs → /home/user/docs)
  */
 function permissionsToBinds(permissions: PermissionsConfig): string[] {
+  // Deduplicate first: if a path is in both readPaths and writePaths, keep rw.
+  const modeByPath = new Map<string, "ro" | "rw">();
+  for (const p of permissions.readPaths) {
+    if (!modeByPath.has(p)) modeByPath.set(p, "ro");
+  }
+  for (const p of permissions.writePaths) {
+    modeByPath.set(p, "rw"); // rw always wins
+  }
+
+  // Build bind specs, converting Windows paths to POSIX so OpenClaw's
+  // Zod schema (which splits on ":") doesn't choke on drive-letter colons.
   const binds: string[] = [];
-
-  // Add read-only binds
-  for (const path of permissions.readPaths) {
-    binds.push(`${path}:${path}:ro`);
+  for (const [rawPath, mode] of modeByPath) {
+    const posix = windowsPathToPosix(rawPath);
+    binds.push(`${posix}:${posix}:${mode}`);
   }
-
-  // Add read-write binds (these override read-only if same path)
-  for (const path of permissions.writePaths) {
-    binds.push(`${path}:${path}:rw`);
-  }
-
-  // Deduplicate: if a path is in both readPaths and writePaths, keep only rw version
-  const uniqueBinds = new Map<string, string>();
-  for (const bind of binds) {
-    const [hostPath] = bind.split(":");
-    // Prefer rw over ro
-    if (!uniqueBinds.has(hostPath) || bind.endsWith(":rw")) {
-      uniqueBinds.set(hostPath, bind);
-    }
-  }
-
-  return Array.from(uniqueBinds.values());
+  return binds;
 }
 
 /**
