@@ -45,6 +45,10 @@ const plugin = {
                 config: {
                     listAccountIds: () => ["default"],
                     resolveAccount: () => ({ id: "default" }),
+                    status: () => ({
+                        configured: !!syncEngineInstance,
+                        running: !!syncEngineInstance
+                    }),
                 },
                 outbound: {
                     deliveryMode: "gateway",
