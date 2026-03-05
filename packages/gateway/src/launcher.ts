@@ -193,6 +193,20 @@ export class GatewayLauncher extends EventEmitter<GatewayEvents> {
       env["OPENCLAW_STATE_DIR"] = this.options.stateDir;
     }
 
+    // !! CRITICAL — DO NOT REMOVE OR MODIFY WITHOUT EXPLICIT OWNER APPROVAL !!
+    //
+    // Prevent the gateway from spawning a detached child on config-triggered
+    // restarts (chokidar → SIGUSR1 → restartGatewayProcessWithFreshPid).
+    // The launcher already manages the process lifecycle, so respawning would
+    // create an orphaned gateway that holds the port while the launcher also
+    // tries to restart — causing "port already in use" failures.
+    //
+    // Removing this line causes a race condition between the gateway's
+    // self-respawn and the launcher's auto-restart that is extremely hard to
+    // reproduce, test, and debug. The symptom is a permanently orphaned
+    // gateway process that blocks all future startups.
+    env["OPENCLAW_NO_RESPAWN"] = "1";
+
     // Sanitize env vars inherited from the parent (Electron main process) or
     // CI environment that can cause the ELECTRON_RUN_AS_NODE child to hang.
     //

@@ -4,6 +4,7 @@ import type { ChannelsStatusSnapshot } from "@easyclaw/core";
 import { promises as fs } from "node:fs";
 import { join } from "node:path";
 import { sendChannelMessage } from "../channel-senders.js";
+import { syncOwnerAllowFrom } from "../owner-sync.js";
 import type { RouteHandler } from "./api-context.js";
 import { sendJson, parseBody, proxiedFetch } from "./route-utils.js";
 
@@ -348,8 +349,14 @@ export const handleChannelRoutes: RouteHandler = async (req, res, url, pathname,
 
     try {
       const allowlist = await readAllAllowFromLists(channelId);
-      const labels = storage.channelRecipients.getLabels(channelId);
-      sendJson(res, 200, { allowlist, labels });
+      const meta = storage.channelRecipients.getRecipientMeta(channelId);
+      const labels: Record<string, string> = {};
+      const owners: Record<string, boolean> = {};
+      for (const [id, data] of Object.entries(meta)) {
+        if (data.label) labels[id] = data.label;
+        owners[id] = data.isOwner;
+      }
+      sendJson(res, 200, { allowlist, labels, owners });
     } catch (err) {
       log.error(`Failed to read allowlist for ${channelId}:`, err);
       sendJson(res, 500, { error: String(err) });
@@ -378,6 +385,36 @@ export const handleChannelRoutes: RouteHandler = async (req, res, url, pathname,
       sendJson(res, 200, { ok: true });
     } catch (err) {
       log.error(`Failed to set recipient label:`, err);
+      sendJson(res, 500, { error: String(err) });
+    }
+    return true;
+  }
+
+  // PUT /api/pairing/allowlist/:channelId/:entry/owner
+  if (pathname.match(/^\/api\/pairing\/allowlist\/[^/]+\/[^/]+\/owner$/) && req.method === "PUT") {
+    const segments = pathname.slice("/api/pairing/allowlist/".length).split("/");
+    const channelId = decodeURIComponent(segments[0]);
+    const recipientId = decodeURIComponent(segments[1]);
+    const body = (await parseBody(req)) as { isOwner?: boolean };
+
+    if (typeof body.isOwner !== "boolean") {
+      sendJson(res, 400, { error: "Missing required field: isOwner (boolean)" });
+      return true;
+    }
+
+    try {
+      storage.channelRecipients.ensureExists(channelId, recipientId);
+      storage.channelRecipients.setOwner(channelId, recipientId, body.isOwner);
+
+      // Write ownerAllowFrom to config and let the gateway's chokidar watcher
+      // handle the reload automatically (~500ms debounce). Don't call
+      // onProviderChange — that would cause a double restart.
+      const configPath = resolveOpenClawConfigPath();
+      syncOwnerAllowFrom(storage, configPath);
+
+      sendJson(res, 200, { ok: true });
+    } catch (err) {
+      log.error(`Failed to set recipient owner:`, err);
       sendJson(res, 500, { error: String(err) });
     }
     return true;
@@ -416,6 +453,15 @@ export const handleChannelRoutes: RouteHandler = async (req, res, url, pathname,
       if (!allowlist.includes(request.id)) {
         allowlist.push(request.id);
         await writeAllowFromList(body.channelId, allowlist, accountId);
+      }
+
+      // Auto-assign owner to first-ever recipient across all channels
+      const isFirstRecipient = !storage.channelRecipients.hasAnyOwner();
+      storage.channelRecipients.ensureExists(body.channelId, request.id, isFirstRecipient);
+      if (isFirstRecipient) {
+        // Write ownerAllowFrom to config; chokidar handles the reload (~500ms debounce)
+        const configPath = resolveOpenClawConfigPath();
+        syncOwnerAllowFrom(storage, configPath);
       }
 
       sendJson(res, 200, { ok: true, id: request.id, entry: request });
@@ -480,6 +526,12 @@ export const handleChannelRoutes: RouteHandler = async (req, res, url, pathname,
       if (changed) {
         log.info(`Removed from ${channelId} allowlist: ${entry}`);
       }
+
+      // Clean up recipient data and sync owner config
+      storage.channelRecipients.delete(channelId, entry);
+      // Write ownerAllowFrom to config; chokidar handles the reload (~500ms debounce)
+      const configPath = resolveOpenClawConfigPath();
+      syncOwnerAllowFrom(storage, configPath);
 
       const remaining = await readAllAllowFromLists(channelId);
       sendJson(res, 200, { ok: true, changed, allowFrom: remaining });

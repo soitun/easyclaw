@@ -6,6 +6,7 @@ import {
   approvePairing,
   removeFromAllowlist,
   setRecipientLabel,
+  setRecipientOwner,
   type PairingRequest,
 } from "../../api/channels.js";
 import { ConfirmDialog } from "../../components/ConfirmDialog.js";
@@ -16,6 +17,7 @@ interface RecipientData {
   error: string | null;
   allowlist: string[];
   labels: Record<string, string>;
+  owners: Record<string, boolean>;
   pairingRequests: PairingRequest[];
 }
 
@@ -45,7 +47,7 @@ export function ChannelAccountsTable({
   async function loadRecipientData(channelId: string) {
     setRecipientData(prev => ({
       ...prev,
-      [channelId]: { loading: true, error: null, allowlist: [], labels: {}, pairingRequests: [] },
+      [channelId]: { loading: true, error: null, allowlist: [], labels: {}, owners: {}, pairingRequests: [] },
     }));
 
     try {
@@ -60,6 +62,7 @@ export function ChannelAccountsTable({
           error: null,
           allowlist: result.allowlist,
           labels: result.labels,
+          owners: result.owners ?? {},
           pairingRequests: requests,
         },
       }));
@@ -149,6 +152,35 @@ export function ChannelAccountsTable({
       });
     } finally {
       setProcessing(null);
+    }
+  }
+
+  async function handleOwnerToggle(channelId: string, recipientId: string, newValue: boolean) {
+    const data = recipientData[channelId];
+    if (!data) return;
+
+    const oldValue = data.owners[recipientId] ?? false;
+
+    // Optimistic update
+    setRecipientData(prev => ({
+      ...prev,
+      [channelId]: {
+        ...prev[channelId],
+        owners: { ...prev[channelId].owners, [recipientId]: newValue },
+      },
+    }));
+
+    try {
+      await setRecipientOwner(channelId, recipientId, newValue);
+    } catch {
+      // Revert on failure
+      setRecipientData(prev => ({
+        ...prev,
+        [channelId]: {
+          ...prev[channelId],
+          owners: { ...prev[channelId].owners, [recipientId]: oldValue },
+        },
+      }));
     }
   }
 
@@ -282,32 +314,52 @@ export function ChannelAccountsTable({
                     <tr>
                       <th>{t("pairing.userId")}</th>
                       <th>{t("pairing.aliasColumn")}</th>
+                      <th>{t("pairing.roleColumn")}</th>
                       <th className="text-right">{t("pairing.action")}</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.allowlist.map(entry => (
-                      <tr key={entry}>
-                        <td>{entry}</td>
-                        <td>
-                          <input
-                            className="recipient-label-input"
-                            defaultValue={data.labels[entry] || ""}
-                            placeholder={t("pairing.labelPlaceholder")}
-                            onBlur={e => handleLabelBlur(channelId, entry, e.target.value.trim())}
-                          />
-                        </td>
-                        <td className="text-right">
-                          <button
-                            className="btn btn-danger btn-sm"
-                            onClick={() => requestRemove(channelId, entry)}
-                            disabled={processing === entry}
-                          >
-                            {processing === entry ? t("pairing.removing") : t("common.remove")}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                    {data.allowlist.map(entry => {
+                      const isOwner = data.owners[entry] ?? false;
+                      return (
+                        <tr key={entry}>
+                          <td>{entry}</td>
+                          <td>
+                            <input
+                              className="recipient-label-input"
+                              defaultValue={data.labels[entry] || ""}
+                              placeholder={t("pairing.labelPlaceholder")}
+                              onBlur={e => handleLabelBlur(channelId, entry, e.target.value.trim())}
+                            />
+                          </td>
+                          <td>
+                            <div className="perm-switcher">
+                              <button
+                                className={`perm-switcher-btn perm-switcher-btn-left ${isOwner ? "perm-switcher-btn-active" : "perm-switcher-btn-inactive"}`}
+                                onClick={() => !isOwner && handleOwnerToggle(channelId, entry, true)}
+                              >
+                                {t("pairing.ownerBadge")}
+                              </button>
+                              <button
+                                className={`perm-switcher-btn perm-switcher-btn-right ${!isOwner ? "perm-switcher-btn-active" : "perm-switcher-btn-inactive"}`}
+                                onClick={() => isOwner && handleOwnerToggle(channelId, entry, false)}
+                              >
+                                {t("pairing.nonOwnerBadge")}
+                              </button>
+                            </div>
+                          </td>
+                          <td className="text-right">
+                            <button
+                              className="btn btn-danger btn-sm"
+                              onClick={() => requestRemove(channelId, entry)}
+                              disabled={processing === entry}
+                            >
+                              {processing === entry ? t("pairing.removing") : t("common.remove")}
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               )}

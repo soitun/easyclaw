@@ -3000,9 +3000,10 @@ tbody td {
   font-size: 13px;
 }
 
-.recipients-table th:nth-child(1) { width: 35%; }
-.recipients-table th:nth-child(2) { width: 35%; }
-.recipients-table th:nth-child(3) { width: 30%; }
+.recipients-table th:nth-child(1) { width: 30%; }
+.recipients-table th:nth-child(2) { width: 28%; }
+.recipients-table th:nth-child(3) { width: 17%; }
+.recipients-table th:nth-child(4) { width: 25%; }
 
 .recipients-table th {
   text-align: left;
