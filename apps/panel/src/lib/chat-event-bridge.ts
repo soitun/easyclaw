@@ -69,8 +69,8 @@ export class ChatEventBridge {
           sessionKey: data.sessionKey,
           channel: data.channel,
         });
-      } catch {
-        // Malformed SSE data — ignore
+      } catch (err) {
+        console.warn("[chat-event-bridge] malformed inbound SSE data:", err);
       }
     });
 
@@ -89,15 +89,18 @@ export class ChatEventBridge {
             runId: data.runId,
           });
         }
-      } catch {
-        // Malformed SSE data — ignore
+      } catch (err) {
+        console.warn("[chat-event-bridge] malformed tool SSE data:", err);
       }
     });
 
-    // EventSource auto-reconnects on network errors. The "error" event
-    // fires on both transient failures (auto-reconnect) and fatal failures
-    // (server returns non-200). We don't need to do anything special here
-    // because EventSource handles reconnection internally.
+    sse.addEventListener("error", () => {
+      // EventSource auto-reconnects on transient errors. Log for debugging
+      // but don't take action — readyState tells us if it's fatal (CLOSED).
+      if (sse.readyState === EventSource.CLOSED) {
+        console.warn("[chat-event-bridge] SSE connection closed permanently");
+      }
+    });
   }
 
   disconnect(): void {

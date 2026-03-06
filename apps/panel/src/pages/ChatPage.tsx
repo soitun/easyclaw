@@ -24,30 +24,19 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
   const { t, i18n } = useTranslation();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
-  const [streaming, _setStreaming] = useState<string | null>(null);
-  const streamingRef = useRef<string | null>(null);
-  /** Update both the streaming state (for UI) and the ref (for synchronous reads). */
-  const setStreaming = useCallback((v: string | null | ((prev: string | null) => string | null)) => {
-    if (typeof v === "function") {
-      _setStreaming((prev) => {
-        const next = v(prev);
-        streamingRef.current = next;
-        return next;
-      });
-    } else {
-      streamingRef.current = v;
-      _setStreaming(v);
-    }
-  }, []);
-  const [runId, setRunId] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState<"connecting" | "connected" | "disconnected">("connecting");
   const [agentName, setAgentName] = useState<string | null>(null);
   const [activeModel, setActiveModel] = useState<{ keyId: string; provider: string; model: string } | null>(null);
   const [modelOptions, setModelOptions] = useState<{ value: string; label: string }[]>([]);
   const [thinkingLevel, setThinkingLevel] = useState("");
   const [allFetched, setAllFetched] = useState(false);
-  const [, forceUpdate] = useReducer((x: number) => x + 1, 0);
+  const [renderTick, forceUpdate] = useReducer((x: number) => x + 1, 0);
   const trackerRef = useRef(new RunTracker(forceUpdate));
+
+  // Derive run lifecycle state from tracker (single source of truth)
+  const view = trackerRef.current.getView();
+  const runId = view.localRunId;
+  const streaming = view.localStreaming;
   const [showAgentEvents, setShowAgentEvents] = useState(true);
   const [preserveToolEvents, setPreserveToolEvents] = useState(false);
   const [chatExamplesExpanded, setChatExamplesExpanded] = useState(() => localStorage.getItem("chat-examples-collapsed") !== "1");
@@ -71,8 +60,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
     connected: connectionState === "connected",
     getState: () => ({
       messages,
-      streaming,
-      runId,
+      trackerSnapshot: trackerRef.current.serialize(),
       draft,
       pendingImages,
       visibleCount,
@@ -80,8 +68,6 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
     }),
     setState: (state) => {
       setMessages(state.messages);
-      setStreaming(state.streaming);
-      setRunId(state.runId);
       setDraft(state.draft);
       setPendingImages(state.pendingImages);
       setVisibleCount(state.visibleCount);
@@ -89,7 +75,11 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
       shouldInstantScrollRef.current = true; stickyRef.current = true;
       fetchLimitRef.current = FETCH_BATCH;
       isFetchingRef.current = false;
-      trackerRef.current.reset();
+      if (state.trackerSnapshot) {
+        trackerRef.current.restore(state.trackerSnapshot);
+      } else {
+        trackerRef.current.reset();
+      }
     },
   });
 
@@ -106,9 +96,6 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
   const sessionKeysRef = useRef<Set<string>>(new Set());
   sessionKeysRef.current = new Set(sessionManager.sessions.map((s) => s.key));
 
-  // Stable refs so event handler closures always see the latest state
-  const runIdRef = useRef(runId);
-  runIdRef.current = runId;
   const lastActivityRef = useRef<number>(0);
   const messagesLengthRef = useRef(messages.length);
   messagesLengthRef.current = messages.length;
@@ -144,7 +131,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
     } else if (stickyRef.current) {
       scrollToBottom();
     }
-  }, [messages, streaming, runId, scrollToBottom]);
+  }, [messages, renderTick, scrollToBottom]);
 
   // Fetch more messages from gateway when user scrolled past all cached messages
   const fetchMore = useCallback(async () => {
@@ -284,7 +271,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
           console.warn("[chat] agent event dropped: stream=%s phase=%s runId=%s tracked=%s localRunId=%s",
             agentPayload.stream, agentPayload.data?.phase, agentRunId,
             agentRunId ? tracker.isTracked(agentRunId) : "no-id",
-            runIdRef.current);
+            tracker.getLocalRunId());
         }
         return;
       }
@@ -297,32 +284,43 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
         const name = agentPayload.data?.name as string | undefined;
         if (phase === "start" && name) {
           // Flush current streaming text into a committed assistant bubble
-          // before adding the tool event.  Read from ref (synchronous) to
-          // avoid React StrictMode double-invocation of state updaters.
-          const flushedText = streamingRef.current;
+          // before adding the tool event.  Read from tracker (single source of truth)
+          // BEFORE dispatching TOOL_START which clears run.streaming.
+          const flushedText = tracker.getRun(agentRunId)?.streaming ?? null;
           // DEBUG: log tool_start flush state
           console.info("[chat] tool_start: tool=%s flushedText=%s runId=%s",
             name, flushedText ? `"${flushedText.slice(0, 40)}..." (${flushedText.length}ch)` : "null", agentRunId);
-          setStreaming(null);
           const toolEvt: ChatMessage = { role: "tool-event", text: name, toolName: name, timestamp: Date.now() };
           if (flushedText) {
             setMessages((prev) => [...prev, { role: "assistant", text: flushedText, timestamp: Date.now() }, toolEvt]);
             // The gateway throttles deltas at 150 ms.  The last few characters
             // before a tool_use may still be in the throttle buffer, never sent.
             // Fetch stored history (which has the complete text) and patch the
-            // truncated bubble so the user barely notices the gap (~100 ms).
+            // truncated bubble.  Use the run's idempotencyKey to precisely locate
+            // the user message, then find the last assistant message after it.
             const client = clientRef.current;
             if (client) {
               const snap = flushedText;
-              client.request<{ messages?: Array<{ role?: string; content?: unknown }> }>(
-                "chat.history", { sessionKey: sessionKeyRef.current, limit: 10 },
+              const runKey = agentRunId; // equals idempotencyKey for local runs
+              client.request<{ messages?: Array<{ role?: string; content?: unknown; idempotencyKey?: string }> }>(
+                "chat.history", { sessionKey: sessionKeyRef.current, limit: 100 },
               ).then((res) => {
                 if (!res?.messages) return;
-                for (let i = res.messages.length - 1; i >= 0; i--) {
-                  const m = res.messages[i];
-                  if (m.role !== "assistant") continue;
-                  const full = extractText(m.content);
-                  if (full && full.length > snap.length && full.startsWith(snap)) {
+                // Find the user message by idempotencyKey, then scan backward
+                // from the end of the array for the last assistant message.
+                let anchor = -1;
+                for (let i = 0; i < res.messages.length; i++) {
+                  if ((res.messages[i] as { idempotencyKey?: string }).idempotencyKey === runKey) {
+                    anchor = i;
+                    break;
+                  }
+                }
+                if (anchor === -1) return; // run not yet in history
+                // The last assistant message after the anchor is the one we need.
+                for (let i = res.messages.length - 1; i > anchor; i--) {
+                  if (res.messages[i].role !== "assistant") continue;
+                  const full = extractText(res.messages[i].content);
+                  if (full && full.length > snap.length) {
                     setMessages((prev) => {
                       const idx = prev.findLastIndex((msg) => msg.role === "assistant" && msg.text === snap);
                       if (idx === -1) return prev;
@@ -333,7 +331,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
                     break;
                   }
                 }
-              }).catch(() => { /* history fetch failed — truncated text remains */ });
+              }).catch((err) => { console.warn("[chat] history patch failed — truncated text remains:", err); });
             }
           } else {
             setMessages((prev) => [...prev, toolEvt]);
@@ -419,7 +417,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
     }
 
     const chatRunId = payload.runId;
-    const isOurLocalRun = runIdRef.current && chatRunId === runIdRef.current;
+    const isOurLocalRun = tracker.getLocalRunId() && chatRunId === tracker.getLocalRunId();
     const isTrackedRun = chatRunId ? tracker.isTracked(chatRunId) : false;
 
     // If not tracked and not our local run, this may be an external run
@@ -467,14 +465,14 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
       switch (payload.state) {
         case "delta": {
           lastActivityRef.current = Date.now();
-          const text = extractText(payload.message?.content);
-          if (text) setStreaming(text);
+          // Streaming text is tracked by CHAT_DELTA dispatch above — no separate state needed.
           break;
         }
         case "final": {
           // DEBUG: log final event state
+          const localStreaming = tracker.getRun(chatRunId!)?.streaming;
           console.info("[chat] final: runId=%s streaming=%s",
-            chatRunId, streamingRef.current ? `"${streamingRef.current.slice(0, 40)}..."` : "null");
+            chatRunId, localStreaming ? `"${localStreaming.slice(0, 40)}..."` : "null");
           const finalText = extractText(payload.message?.content);
           if (finalText) {
             setMessages((prev) => [...prev, { role: "assistant", text: finalText, timestamp: Date.now() }]);
@@ -483,8 +481,6 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
             trackEvent("chat.response_received", { durationMs: Date.now() - sendTimeRef.current });
             sendTimeRef.current = 0;
           }
-          setStreaming(null);
-          setRunId(null);
           lastAgentStreamRef.current = null;
           tracker.cleanup();
           break;
@@ -494,23 +490,18 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
           const raw = payload.errorMessage ?? t("chat.unknownError");
           const errText = localizeError(raw, t);
           setMessages((prev) => [...prev, { role: "assistant", text: `⚠ ${errText}`, timestamp: Date.now() }]);
-          setStreaming(null);
-          setRunId(null);
           lastAgentStreamRef.current = null;
-
           tracker.cleanup();
           break;
         }
         case "aborted": {
           // If there was partial streaming text, keep it as a message.
-          const abortedText = streamingRef.current;
-          setStreaming(null);
+          // Read from tracker BEFORE cleanup (which removes the run).
+          const abortedText = tracker.getRun(chatRunId!)?.streaming ?? null;
           if (abortedText) {
             setMessages((prev) => [...prev, { role: "assistant", text: abortedText, timestamp: Date.now() }]);
           }
-          setRunId(null);
           lastAgentStreamRef.current = null;
-
           tracker.cleanup();
           break;
         }
@@ -522,8 +513,8 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
       }
       if (payload.state === "final") {
         // DEBUG: log external final that triggers history reload
-        console.info("[chat] external final → reloading history: runId=%s localRunId=%s streaming=%s",
-          chatRunId, runIdRef.current, streamingRef.current ? `"${streamingRef.current.slice(0, 40)}..."` : "null");
+        console.info("[chat] external final → reloading history: runId=%s localRunId=%s",
+          chatRunId, tracker.getLocalRunId());
         // External run finished — reload history to show the full conversation
         const client = clientRef.current;
         if (client) loadHistory(client);
@@ -542,11 +533,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
   // (tool events, "waiting for LLM", etc.) gives users enough feedback.
   // The old 30s timeout would wrongly abort long-running tool calls
   // and blame slow LLM providers, which isn't actionable.
-  useEffect(() => {
-    if (!runId) return;
-    lastActivityRef.current = Date.now();
-    lastAgentStreamRef.current = null;
-  }, [runId]);
+  // Activity tracking reset moved to handleSend (imperative, after LOCAL_SEND dispatch).
 
   // Re-fetch chat display settings when changed in SettingsPage.
   // ChatPage stays mounted (display:none) so the init effect won't re-run.
@@ -652,15 +639,14 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
           onDisconnected: () => {
             if (cancelled) return;
             setConnectionState("connecting");
-            const wasWaiting = !!runIdRef.current;
+            const localId = trackerRef.current.getLocalRunId();
+            const wasWaiting = !!localId;
             // If streaming was in progress, save partial text.
-            const disconnectText = streamingRef.current;
-            setStreaming(null);
+            const disconnectText = localId ? (trackerRef.current.getRun(localId)?.streaming ?? null) : null;
+            trackerRef.current.reset();
             if (disconnectText) {
               setMessages((prev) => [...prev, { role: "assistant", text: disconnectText, timestamp: Date.now() }]);
             }
-            setRunId(null);
-            trackerRef.current.reset();
             lastAgentStreamRef.current = null;
             // Defer error display: auto-reconnect calls loadHistory which
             // overwrites messages. The ref is checked after loadHistory completes.
@@ -747,16 +733,16 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
       ? files.map((img) => ({ data: img.base64, mimeType: img.mimeType }))
       : undefined;
     const sentAt = Date.now();
-    setMessages((prev) => [...prev, { role: "user", text, timestamp: sentAt, images: optimisticImages }]);
+    setMessages((prev) => [...prev, { role: "user", text, timestamp: sentAt, images: optimisticImages, idempotencyKey }]);
     if (optimisticImages) {
-      saveImages(sessionKeyRef.current, sentAt, optimisticImages).catch(() => {});
+      saveImages(sessionKeyRef.current, idempotencyKey, sentAt, optimisticImages).catch(() => {});
     }
     shouldInstantScrollRef.current = true; stickyRef.current = true;
     setDraft("");
     setPendingImages([]);
-    setRunId(idempotencyKey);
-
     trackerRef.current.dispatch({ type: "LOCAL_SEND", runId: idempotencyKey, sessionKey: sessionKeyRef.current });
+    lastActivityRef.current = Date.now();
+    lastAgentStreamRef.current = null;
     sendTimeRef.current = Date.now();
     trackEvent("chat.message_sent", { hasAttachment: files.length > 0 });
 
@@ -776,19 +762,18 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
     if (thinkingLevel) params.thinking = thinkingLevel;
 
     clientRef.current.request("chat.send", params).catch((err) => {
-      // RPC-level failure — clear runId so UI doesn't get stuck in streaming mode
+      // RPC-level failure — transition run to error so UI doesn't get stuck
       const raw = formatError(err) || t("chat.sendError");
       const errText = localizeError(raw, t);
       setMessages((prev) => [...prev, { role: "assistant", text: `⚠ ${errText}`, timestamp: Date.now() }]);
-      setStreaming(null);
-      setRunId(null);
+      trackerRef.current.dispatch({ type: "CHAT_ERROR", runId: idempotencyKey });
+      trackerRef.current.cleanup();
     });
   }
 
   function handleStop() {
     if (!clientRef.current) return;
-    const view = trackerRef.current.getView();
-    const targetRunId = runIdRef.current ?? view.abortTargetRunId;
+    const targetRunId = trackerRef.current.getView().abortTargetRunId;
     if (!targetRunId) return;
     trackEvent("chat.generation_stopped");
     clientRef.current.request("chat.abort", {
@@ -817,8 +802,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
     setShowResetConfirm(false);
     if (!clientRef.current) return;
     // Abort any active run first
-    const view = trackerRef.current.getView();
-    const targetRunId = runIdRef.current ?? view.abortTargetRunId;
+    const targetRunId = trackerRef.current.getView().abortTargetRunId;
     if (targetRunId) {
       clientRef.current.request("chat.abort", {
         sessionKey: sessionKeyRef.current,
@@ -831,8 +815,6 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
     }).then(() => {
       setMessages([{ role: "assistant", text: `🔄 ${t("chat.resetCommandFeedback")}`, timestamp: Date.now() }]);
       clearImages(sessionKeyRef.current).catch(() => {});
-      setStreaming(null);
-      setRunId(null);
       trackerRef.current.reset();
       lastAgentStreamRef.current = null;
     }).catch((err) => {

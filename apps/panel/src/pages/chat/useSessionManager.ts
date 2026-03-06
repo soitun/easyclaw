@@ -262,8 +262,7 @@ export function useSessionManager(opts: UseSessionManagerOptions): UseSessionMan
       // Fetch from gateway
       const freshState: SessionChatState = {
         messages: [],
-        streaming: null,
-        runId: null,
+        trackerSnapshot: null,
         draft: "",
         pendingImages: [],
         visibleCount: INITIAL_VISIBLE,
@@ -316,8 +315,7 @@ export function useSessionManager(opts: UseSessionManagerOptions): UseSessionMan
 
     const freshState: SessionChatState = {
       messages: [],
-      streaming: null,
-      runId: null,
+      trackerSnapshot: null,
       draft: "",
       pendingImages: [],
       visibleCount: INITIAL_VISIBLE,
@@ -371,8 +369,7 @@ export function useSessionManager(opts: UseSessionManagerOptions): UseSessionMan
       } else {
         setStateRef.current({
           messages: [],
-          streaming: null,
-          runId: null,
+          trackerSnapshot: null,
           draft: "",
           pendingImages: [],
           visibleCount: INITIAL_VISIBLE,

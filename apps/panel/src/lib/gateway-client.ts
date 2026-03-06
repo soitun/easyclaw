@@ -110,8 +110,8 @@ export class GatewayChatClient {
       this.scheduleReconnect();
     });
 
-    ws.addEventListener("error", () => {
-      // close handler will fire
+    ws.addEventListener("error", (e) => {
+      console.warn("[gateway-client] WebSocket error (close handler will follow):", e);
     });
   }
 
@@ -150,7 +150,8 @@ export class GatewayChatClient {
         this.startKeepalive();
         this.opts.onConnected?.(hello);
       })
-      .catch(() => {
+      .catch((err) => {
+        console.warn("[gateway-client] connect handshake failed:", err);
         this.ws?.close();
       });
   }
@@ -177,13 +178,13 @@ export class GatewayChatClient {
     }, KEEPALIVE_TIMEOUT_MS);
 
     // Use a lightweight RPC call as an application-level ping.
-    // "sessions.list" with limit 0 is cheap and always available.
-    this.request("sessions.list", { limit: 0 })
+    // "sessions.list" with limit 1 is cheap and always available.
+    this.request("sessions.list", { limit: 1 })
       .then(() => {
         if (this.keepaliveTimeout) { clearTimeout(this.keepaliveTimeout); this.keepaliveTimeout = null; }
       })
-      .catch(() => {
-        // Request rejected — connection is likely dead, close handler will fire.
+      .catch((err) => {
+        console.warn("[gateway-client] keepalive ping failed:", err);
       });
   }
 

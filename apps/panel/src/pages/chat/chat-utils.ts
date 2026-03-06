@@ -8,6 +8,8 @@ export type ChatMessage = {
   timestamp: number;
   images?: ChatImage[];
   toolName?: string;
+  /** Gateway-assigned idempotency key — present on user messages loaded from history. */
+  idempotencyKey?: string;
   /** True for user messages from external channels (Telegram, Chrome, etc.), not typed in the panel. */
   isExternal?: boolean;
   /** Source channel for external messages (e.g. "telegram", "wechat"). */
@@ -32,8 +34,7 @@ export type SessionTabInfo = {
 /** Per-session cached state for tab switching. */
 export type SessionChatState = {
   messages: ChatMessage[];
-  streaming: string | null;
-  runId: string | null;
+  trackerSnapshot: import("../../lib/run-tracker.js").RunTrackerSnapshot | null;
   draft: string;
   pendingImages: PendingImage[];
   visibleCount: number;
@@ -241,7 +242,7 @@ function isToolCallBlock(block: Record<string, unknown>): boolean {
  * visibility is controlled at render time via the preserveToolEvents setting.
  */
 export function parseRawMessages(
-  raw?: Array<{ role?: string; content?: unknown; timestamp?: number }>,
+  raw?: Array<{ role?: string; content?: unknown; timestamp?: number; idempotencyKey?: string }>,
 ): ChatMessage[] {
   if (!raw) return [];
   const parsed: ChatMessage[] = [];
@@ -254,6 +255,7 @@ export function parseRawMessages(
       const images = extractImages(msg.content);
       if (text.trim() || images.length > 0) {
         const entry: ChatMessage = { role: msg.role, text, timestamp: msg.timestamp ?? 0, images: images.length > 0 ? images : undefined };
+        if (msg.idempotencyKey) entry.idempotencyKey = msg.idempotencyKey;
         // Mark system-generated user messages (cron events, heartbeat prompts)
         // as external so they render on the left/agent side.
         if (msg.role === "user" && isSystemEventMessage(text)) {

@@ -51,7 +51,16 @@ const chatEventSSEClients = new Set<ServerResponse>();
 export function pushChatSSE(event: string, data: unknown): void {
   const msg = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
   for (const res of chatEventSSEClients) {
-    res.write(msg);
+    if (!res.writable) {
+      chatEventSSEClients.delete(res);
+      continue;
+    }
+    res.write(msg, (err) => {
+      if (err) {
+        console.warn("[panel-server] SSE write failed, removing client:", err.message);
+        chatEventSSEClients.delete(res);
+      }
+    });
   }
 }
 
@@ -291,7 +300,7 @@ export function startPanelServer(options: PanelServerOptions): Server {
   const queryService = new UsageQueryService(storage, captureUsage);
 
   // Mobile Chat Pairing Manager
-  const mobileManager = new MobileManager(storage);
+  const mobileManager = new MobileManager(storage, undefined, resolveOpenClawStateDir());
 
   // Reconcile usage snapshot for the active key on startup
   const activeKeyOnStartup = storage.providerKeys.getActive();
@@ -337,7 +346,9 @@ export function startPanelServer(options: PanelServerOptions): Server {
       });
       res.write(":ok\n\n");
       chatEventSSEClients.add(res);
-      req.on("close", () => chatEventSSEClients.delete(res));
+      const cleanup = () => chatEventSSEClients.delete(res);
+      req.on("close", cleanup);
+      res.on("error", cleanup);
       return;
     }
 

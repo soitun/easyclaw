@@ -406,6 +406,114 @@ describe("RunTracker", () => {
   });
 
   // ---------------------------------------------------------------------------
+  // serialize / restore
+  // ---------------------------------------------------------------------------
+  describe("serialize / restore", () => {
+    it("round-trips active runs and localRunId", () => {
+      const { tracker } = createTracker();
+      tracker.dispatch({ type: "LOCAL_SEND", runId: "r1", sessionKey: "s1" });
+      tracker.dispatch({ type: "CHAT_DELTA", runId: "r1", text: "hello" });
+      tracker.dispatch({ type: "EXTERNAL_INBOUND", runId: "ext1", sessionKey: "s1", channel: "wechat" });
+
+      const snapshot = tracker.serialize();
+      expect(snapshot.localRunId).toBe("r1");
+      expect(snapshot.runs).toHaveLength(2);
+
+      // Restore into a fresh tracker
+      const { tracker: t2, onChange: onChange2 } = createTracker();
+      t2.restore(snapshot);
+      expect(onChange2).toHaveBeenCalledTimes(1);
+
+      expect(t2.getLocalRunId()).toBe("r1");
+      expect(t2.isTracked("r1")).toBe(true);
+      expect(t2.isTracked("ext1")).toBe(true);
+      expect(t2.getRun("r1")!.streaming).toBe("hello");
+      // CHAT_DELTA promotes queued/awaiting_llm to generating, but processing stays
+      expect(t2.getRun("r1")!.phase).toBe("processing");
+    });
+
+    it("restore replaces existing state", () => {
+      const { tracker } = createTracker();
+      tracker.dispatch({ type: "LOCAL_SEND", runId: "old", sessionKey: "s1" });
+
+      const snapshot = { runs: [], localRunId: null };
+      tracker.restore(snapshot);
+
+      expect(tracker.isTracked("old")).toBe(false);
+      expect(tracker.getLocalRunId()).toBeNull();
+    });
+
+    it("events continue to work after restore", () => {
+      const { tracker } = createTracker();
+      tracker.dispatch({ type: "LOCAL_SEND", runId: "r1", sessionKey: "s1" });
+      const snapshot = tracker.serialize();
+
+      const { tracker: t2 } = createTracker();
+      t2.restore(snapshot);
+      t2.dispatch({ type: "CHAT_DELTA", runId: "r1", text: "world" });
+      expect(t2.getRun("r1")!.streaming).toBe("world");
+
+      t2.dispatch({ type: "CHAT_FINAL", runId: "r1" });
+      expect(t2.getRun("r1")!.phase).toBe("done");
+      expect(t2.getLocalRunId()).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // TOOL_START clears streaming
+  // ---------------------------------------------------------------------------
+  describe("TOOL_START clears streaming", () => {
+    it("clears streaming text when entering tooling phase", () => {
+      const { tracker } = createTracker();
+      tracker.dispatch({ type: "LOCAL_SEND", runId: "r1", sessionKey: "s1" });
+      tracker.dispatch({ type: "CHAT_DELTA", runId: "r1", text: "partial text" });
+      expect(tracker.getRun("r1")!.streaming).toBe("partial text");
+
+      tracker.dispatch({ type: "TOOL_START", runId: "r1", toolName: "browser" });
+      expect(tracker.getRun("r1")!.streaming).toBeUndefined();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // getView — localRunId and localStreaming
+  // ---------------------------------------------------------------------------
+  describe("getView localRunId / localStreaming", () => {
+    it("returns localRunId and localStreaming for active local run", () => {
+      const { tracker } = createTracker();
+      tracker.dispatch({ type: "LOCAL_SEND", runId: "r1", sessionKey: "s1" });
+      tracker.dispatch({ type: "CHAT_DELTA", runId: "r1", text: "hi" });
+      const view = tracker.getView();
+      expect(view.localRunId).toBe("r1");
+      expect(view.localStreaming).toBe("hi");
+    });
+
+    it("returns null localRunId when local run is terminal", () => {
+      const { tracker } = createTracker();
+      tracker.dispatch({ type: "LOCAL_SEND", runId: "r1", sessionKey: "s1" });
+      tracker.dispatch({ type: "CHAT_FINAL", runId: "r1" });
+      const view = tracker.getView();
+      expect(view.localRunId).toBeNull();
+      expect(view.localStreaming).toBeNull();
+    });
+
+    it("returns null when no local run exists", () => {
+      const { tracker } = createTracker();
+      tracker.dispatch({ type: "EXTERNAL_INBOUND", runId: "ext1", sessionKey: "s1", channel: "wechat" });
+      const view = tracker.getView();
+      expect(view.localRunId).toBeNull();
+      expect(view.localStreaming).toBeNull();
+    });
+
+    it("returns null localStreaming when local run has no streaming text", () => {
+      const { tracker } = createTracker();
+      tracker.dispatch({ type: "LOCAL_SEND", runId: "r1", sessionKey: "s1" });
+      const view = tracker.getView();
+      expect(view.localRunId).toBe("r1");
+      expect(view.localStreaming).toBeNull();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // No-op actions for unknown or terminal runs
   // ---------------------------------------------------------------------------
   describe("no-op for invalid transitions", () => {

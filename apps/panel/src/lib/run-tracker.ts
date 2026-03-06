@@ -51,6 +51,16 @@ export interface RunTrackerView {
   canAbort: boolean;
   /** runId to pass to chat.abort */
   abortTargetRunId: string | null;
+  /** Local run ID (null if no local run is active) */
+  localRunId: string | null;
+  /** Streaming text of the local run (null if no local run or no text yet) */
+  localStreaming: string | null;
+}
+
+/** Serialisable snapshot of RunTracker state for per-session caching. */
+export interface RunTrackerSnapshot {
+  runs: Array<[string, RunState]>;
+  localRunId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -141,6 +151,7 @@ export class RunTracker {
         if (run && ACTIVE_PHASES.has(run.phase)) {
           run.phase = "tooling";
           run.toolName = action.toolName;
+          run.streaming = undefined;
           changed = true;
         }
         break;
@@ -287,6 +298,9 @@ export class RunTracker {
       abortTarget = displayRun;
     }
 
+    // Local run is only "active" when it has an active phase
+    const localActive = this.localRunId ? activeRuns.has(this.localRunId) : false;
+
     return {
       activeRuns,
       isActive,
@@ -295,6 +309,8 @@ export class RunTracker {
       displayStreaming: displayRun?.streaming ?? null,
       canAbort: abortTarget !== null,
       abortTargetRunId: abortTarget?.runId ?? null,
+      localRunId: localActive ? this.localRunId : null,
+      localStreaming: localActive ? (this.runs.get(this.localRunId!)?.streaming ?? null) : null,
     };
   }
 
@@ -331,6 +347,21 @@ export class RunTracker {
   reset(): void {
     this.runs.clear();
     this.localRunId = null;
+    this.onChange();
+  }
+
+  /** Snapshot current state for per-session caching. */
+  serialize(): RunTrackerSnapshot {
+    return {
+      runs: Array.from(this.runs.entries()),
+      localRunId: this.localRunId,
+    };
+  }
+
+  /** Restore state from a snapshot (e.g. after tab switch). Calls onChange once. */
+  restore(snapshot: RunTrackerSnapshot): void {
+    this.runs = new Map(snapshot.runs);
+    this.localRunId = snapshot.localRunId;
     this.onChange();
   }
 }

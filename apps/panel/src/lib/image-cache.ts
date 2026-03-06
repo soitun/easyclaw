@@ -14,9 +14,10 @@ import type { ChatImage, ChatMessage } from "../pages/chat/chat-utils.js";
 
 interface CachedImageRecord {
   sessionKey: string;
-  timestamp: number;   // same Date.now() used in the optimistic ChatMessage
+  idempotencyKey: string;  // unique per send — primary matching key
+  timestamp: number;       // fallback for old records without idempotencyKey
   images: ChatImage[];
-  savedAt: number;     // for 30-day expiry
+  savedAt: number;         // for 30-day expiry
 }
 
 const DB_NAME = "easyclaw-image-cache";
@@ -53,6 +54,7 @@ function openDB(): Promise<IDBDatabase> {
 /** Cache images when the user sends a message with attachments. */
 export async function saveImages(
   sessionKey: string,
+  idempotencyKey: string,
   timestamp: number,
   images: ChatImage[],
 ): Promise<void> {
@@ -60,6 +62,7 @@ export async function saveImages(
   const tx = db.transaction(STORE, "readwrite");
   tx.objectStore(STORE).add({
     sessionKey,
+    idempotencyKey,
     timestamp,
     images,
     savedAt: Date.now(),
@@ -73,8 +76,8 @@ export async function saveImages(
 /**
  * Merge cached images into parsed history messages.
  *
- * For each user message that has no images, look for a cached record
- * with a matching sessionKey and timestamp (±5 s tolerance).
+ * Primary matching: by `idempotencyKey` (exact, no tolerance needed).
+ * Fallback: by timestamp (±5 s) for old cache records without a key.
  * Returns a new array — does not mutate the input.
  */
 export async function restoreImages(
@@ -92,14 +95,30 @@ export async function restoreImages(
       const cached: CachedImageRecord[] = req.result;
       if (cached.length === 0) { resolve(messages); return; }
 
-      // Mark used entries so the same cache record isn't matched twice
+      // Build a lookup by idempotencyKey for O(1) matching
+      const byKey = new Map<string, number>();
+      for (let i = 0; i < cached.length; i++) {
+        if (cached[i].idempotencyKey) byKey.set(cached[i].idempotencyKey, i);
+      }
+
       const used = new Set<number>();
 
       const result = messages.map((msg) => {
         if (msg.role !== "user" || (msg.images && msg.images.length > 0)) return msg;
 
+        // 1) Exact match by idempotencyKey
+        if (msg.idempotencyKey) {
+          const idx = byKey.get(msg.idempotencyKey);
+          if (idx !== undefined && !used.has(idx)) {
+            used.add(idx);
+            return { ...msg, images: cached[idx].images };
+          }
+        }
+
+        // 2) Fallback: timestamp tolerance (for old records without key)
         for (let i = 0; i < cached.length; i++) {
           if (used.has(i)) continue;
+          if (cached[i].idempotencyKey) continue; // already tried via byKey
           if (Math.abs(cached[i].timestamp - msg.timestamp) <= TIMESTAMP_TOLERANCE_MS) {
             used.add(i);
             return { ...msg, images: cached[i].images };
