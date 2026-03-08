@@ -2,8 +2,7 @@ import { createServer } from "node:http";
 import type { ServerResponse, Server } from "node:http";
 import { readFileSync, existsSync, statSync, watch } from "node:fs";
 import { join, extname, resolve, normalize } from "node:path";
-import { randomUUID } from "node:crypto";
-import { formatError, IMAGE_EXT_TO_MIME, resolveGatewayPort, resolvePanelPort } from "@easyclaw/core";
+import { formatError, IMAGE_EXT_TO_MIME, resolvePanelPort } from "@easyclaw/core";
 import { createLogger } from "@easyclaw/logger";
 import type { Storage } from "@easyclaw/storage";
 import type { SecretStore } from "@easyclaw/secrets";
@@ -17,7 +16,6 @@ import { UsageQueryService } from "./usage-query-service.js";
 import { MobileManager } from "./mobile-manager.js";
 import { initCSBridge, restoreCS } from "./customer-service-bridge.js";
 import { sendChannelMessage } from "./channel-senders.js";
-import { createWeComRelay } from "./wecom-relay.js";
 import type { ApiContext, RouteHandler } from "./api-routes/api-context.js";
 import { sendJson } from "./api-routes/route-utils.js";
 import { proxiedFetch } from "./api-routes/route-utils.js";
@@ -26,7 +24,6 @@ import { handleSettingsRoutes } from "./api-routes/settings-routes.js";
 import { handleProviderRoutes } from "./api-routes/provider-routes.js";
 import { handleChannelRoutes } from "./api-routes/channel-routes.js";
 import { handleUsageRoutes } from "./api-routes/usage-routes.js";
-import { handleWecomRoutes } from "./api-routes/wecom-routes.js";
 import { handleSkillsRoutes } from "./api-routes/skills-routes.js";
 import { handleChatSessionRoutes } from "./api-routes/chat-session-routes.js";
 import { handleMobileChatRoutes } from "./api-routes/mobile-chat-routes.js";
@@ -220,7 +217,6 @@ export interface PanelServerOptions {
 // --- Route handlers (dispatched in order, first match wins) ---
 
 const routeHandlers: RouteHandler[] = [
-  handleWecomRoutes,     // Must be before channels (wecom/unbind, wecom/bind match channels/ prefix)
   handleRulesRoutes,
   handleSettingsRoutes,
   handleProviderRoutes,
@@ -239,10 +235,6 @@ export function startPanelServer(options: PanelServerOptions): Server {
   const port = options.port ?? resolvePanelPort();
   const distDir = resolve(options.panelDistDir);
   const { storage, secretStore, getRpcClient, onRuleChange, onProviderChange, onOpenFileDialog, sttManager, onSttChange, onPermissionsChange, onBrowserChange, onAutoLaunchChange, onChannelConfigured, onOAuthFlow, onOAuthAcquire, onOAuthSave, onOAuthManualComplete, onTelemetryTrack, vendorDir, deviceId, getUpdateResult, getGatewayInfo, changelogPath, onUpdateDownload, onUpdateCancel, onUpdateInstall, getUpdateDownloadState } = options;
-
-  // Create WeCom relay instance
-  const wecomRelay = createWeComRelay({ pushChatSSE });
-  wecomRelay.initRefs({ storage, sttMgr: sttManager ?? undefined });
 
   // Initialize the customer service bridge
   initCSBridge({ storage, secretStore, getGatewayInfo, deviceId });
@@ -319,7 +311,7 @@ export function startPanelServer(options: PanelServerOptions): Server {
     sttManager, onSttChange, onPermissionsChange, onBrowserChange, onAutoLaunchChange,
     onChannelConfigured, onOAuthFlow, onOAuthAcquire, onOAuthSave, onOAuthManualComplete,
     onTelemetryTrack, vendorDir, deviceId, getUpdateResult, getGatewayInfo,
-    snapshotEngine, queryService, wecomRelay, mobileManager,
+    snapshotEngine, queryService, mobileManager,
   };
 
   const server = createServer(async (req, res) => {
@@ -450,35 +442,6 @@ export function startPanelServer(options: PanelServerOptions): Server {
   });
 
   server.on("close", () => pairingNotifier.stop());
-
-  // Restore WeCom relay connection from persisted credentials
-  // TODO: re-enable when cs-relay wecom-kf adapter is ready
-  const wecomRelayDisabled = true;
-  const savedRelayUrl = storage.settings.get("wecom-relay-url");
-  if (savedRelayUrl && !wecomRelayDisabled) {
-    secretStore.get("wecom-auth-token").then((savedAuthToken) => {
-      if (!savedAuthToken) return;
-      const gwId = deviceId ?? randomUUID();
-      const savedExternalUserId = storage.settings.get("wecom-external-user-id") as string | undefined;
-      wecomRelay.setState({
-        relayUrl: savedRelayUrl,
-        authToken: savedAuthToken,
-        connected: false,
-        externalUserId: savedExternalUserId,
-      });
-      const gwInfo = getGatewayInfo?.();
-      wecomRelay.start({
-        relayUrl: savedRelayUrl,
-        authToken: savedAuthToken,
-        gatewayId: gwId,
-        gatewayWsUrl: gwInfo?.wsUrl ?? `ws://127.0.0.1:${resolveGatewayPort()}`,
-        gatewayToken: gwInfo?.token,
-      });
-      log.info("WeCom relay: restored from saved credentials");
-    }).catch((err) => {
-      log.warn("WeCom relay: failed to restore saved credentials:", err);
-    });
-  }
 
   // Restore customer service module
   restoreCS().catch((err) => {

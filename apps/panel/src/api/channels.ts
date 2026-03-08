@@ -184,32 +184,3 @@ export async function removeFromAllowlist(channelId: string, entry: string): Pro
   });
 }
 
-// --- WeCom Channel ---
-
-export type WeComBindingStatus = "pending" | "bound" | "active" | "error";
-
-export interface WeComBindingStatusResponse {
-  status: WeComBindingStatus | null;
-  relayUrl?: string;
-  externalUserId?: string;
-  connected?: boolean;
-  bindingToken?: string;
-  customerServiceUrl?: string;
-}
-
-export async function fetchWeComBindingStatus(): Promise<WeComBindingStatusResponse> {
-  return fetchJson<WeComBindingStatusResponse>("/channels/wecom/binding-status");
-}
-
-export async function bindWeComAccount(relayUrl: string, authToken: string): Promise<{ ok: boolean; bindingToken?: string; customerServiceUrl?: string }> {
-  return fetchJson("/channels/wecom/bind", {
-    method: "POST",
-    body: JSON.stringify({ relayUrl, authToken }),
-  });
-}
-
-export async function unbindWeComAccount(): Promise<{ ok: boolean }> {
-  return fetchJson("/channels/wecom/unbind", {
-    method: "DELETE",
-  });
-}

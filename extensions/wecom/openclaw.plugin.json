@@ -1,9 +1,0 @@
-{
-  "id": "wecom",
-  "channels": ["wechat"],
-  "configSchema": {
-    "type": "object",
-    "additionalProperties": false,
-    "properties": {}
-  }
-}

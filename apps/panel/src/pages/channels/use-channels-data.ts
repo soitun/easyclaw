@@ -1,22 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
-import { fetchChannelStatus, fetchWeComBindingStatus, type ChannelsStatusSnapshot, type WeComBindingStatusResponse } from "../../api/index.js";
+import { useState, useEffect } from "react";
+import { fetchChannelStatus, type ChannelsStatusSnapshot } from "../../api/index.js";
 
 export function useChannelsData() {
   const [snapshot, setSnapshot] = useState<ChannelsStatusSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const [wecomStatus, setWecomStatus] = useState<WeComBindingStatusResponse | null>(null);
-
-  const loadWeComStatus = useCallback(async () => {
-    try {
-      const data = await fetchWeComBindingStatus();
-      setWecomStatus(data);
-    } catch {
-      // API not implemented (501) or gateway not ready — show "not connected" state
-      setWecomStatus(null);
-    }
-  }, []);
 
   async function loadChannelStatus(showLoading = true) {
     if (showLoading) setLoading(true);
@@ -67,8 +56,6 @@ export function useChannelsData() {
         setSnapshot(data);
         setLoading(false);
         setRefreshing(false);
-        // Also fetch WeCom status
-        loadWeComStatus();
         // Healthy — next poll in 30s
         timer = setTimeout(poll, 30000);
       } catch (err) {
@@ -83,7 +70,7 @@ export function useChannelsData() {
     poll();
 
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [loadWeComStatus]);
+  }, []);
 
   function handleRefresh() {
     setRefreshing(true);
@@ -91,9 +78,8 @@ export function useChannelsData() {
   }
 
   return {
-    snapshot, loading, error, refreshing, wecomStatus,
-    setWecomStatus,
-    loadChannelStatus, retryUntilReady, loadWeComStatus,
+    snapshot, loading, error, refreshing,
+    loadChannelStatus, retryUntilReady,
     handleRefresh,
   };
 }

@@ -9,9 +9,6 @@ const log = createLogger("gateway:secret-injector");
  * Static mapping for non-LLM secrets (channel tokens, STT keys, etc.).
  */
 const STATIC_SECRET_ENV_MAP: Record<string, string> = {
-  "wecom-corp-secret": "WECOM_CORP_SECRET",
-  "wecom-token": "WECOM_TOKEN",
-  "wecom-encoding-aes-key": "WECOM_ENCODING_AES_KEY",
   "stt-api-key": "STT_API_KEY", // Legacy
   "stt-groq-apikey": "GROQ_API_KEY",
   "stt-volcengine-appkey": "VOLCENGINE_APP_KEY",

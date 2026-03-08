@@ -198,37 +198,6 @@ importers:
         specifier: ^4.0.18
         version: 4.0.18(@types/node@25.2.2)(jiti@2.6.1)(jsdom@28.1.0)(lightningcss@1.31.1)(terser@5.46.0)(yaml@2.8.2)
 
-  apps/wecom-relay:
-    dependencies:
-      '@easyclaw/logger':
-        specifier: workspace:*
-        version: link:../../packages/logger
-      better-sqlite3:
-        specifier: ^12.6.2
-        version: 12.6.2
-      ws:
-        specifier: ^8.18.0
-        version: 8.19.0
-      zod:
-        specifier: ^3.24.1
-        version: 3.25.76
-    devDependencies:
-      '@types/better-sqlite3':
-        specifier: ^7.6.12
-        version: 7.6.13
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      oxlint:
-        specifier: ^1.43.0
-        version: 1.43.0
-      tsdown:
-        specifier: ^0.20.3
-        version: 0.20.3(synckit@0.11.12)(typescript@5.9.3)
-      vitest:
-        specifier: ^4.0.18
-        version: 4.0.18(@types/node@25.2.2)(jiti@2.6.1)(jsdom@28.1.0)(lightningcss@1.31.1)(terser@5.46.0)(yaml@2.8.2)
-
   extensions/easyclaw-policy:
     dependencies:
       '@easyclaw/logger':
@@ -282,28 +251,6 @@ importers:
         version: 4.0.18(@types/node@22.19.9)(jiti@2.6.1)(jsdom@28.1.0)(lightningcss@1.31.1)(terser@5.46.0)(yaml@2.8.2)
 
   extensions/mobile-chat-channel:
-    dependencies:
-      '@easyclaw/logger':
-        specifier: workspace:*
-        version: link:../../packages/logger
-      ws:
-        specifier: ^8.18.0
-        version: 8.19.0
-    devDependencies:
-      '@types/ws':
-        specifier: ^8.18.1
-        version: 8.18.1
-      oxlint:
-        specifier: ^1.43.0
-        version: 1.43.0
-      tsdown:
-        specifier: ^0.20.3
-        version: 0.20.3(synckit@0.11.12)(typescript@5.9.3)
-      vitest:
-        specifier: ^4.0.18
-        version: 4.0.18(@types/node@25.2.2)(jiti@2.6.1)(jsdom@28.1.0)(lightningcss@1.31.1)(terser@5.46.0)(yaml@2.8.2)
-
-  extensions/wecom:
     dependencies:
       '@easyclaw/logger':
         specifier: workspace:*

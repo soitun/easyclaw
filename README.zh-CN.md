@@ -20,7 +20,6 @@ EasyClaw 把 OpenClaw 封装成一个**人人都能用的桌面应用**：安装
 - **多服务商 LLM 支持**：支持 20+ 个服务商（OpenAI、Anthropic、Google Gemini、DeepSeek、智谱/Z.ai、Moonshot/Kimi、通义千问、Groq、Mistral、xAI、OpenRouter、MiniMax、Venice AI、小米/MiMo、火山引擎/豆包、Amazon Bedrock、NVIDIA NIM 等），另有订阅/编程计划（Claude、Gemini、智谱编程、通义编程、Kimi Code、MiniMax 编程、火山编程）以及 Ollama 本地模型支持
 - **OAuth 与订阅计划**：使用 Google 账号登录即可免费使用 Gemini，或连接 Claude/Anthropic 订阅——无需 API 密钥。自动检测或安装 CLI 凭据
 - **按服务商配置代理**：为每个 LLM 服务商或 API 密钥配置 HTTP/SOCKS5 代理，支持自动路由和热重载——对受限地区至关重要
-- **微信消息通道（企业微信）** *（已废弃）*：通过企业微信客服 API 中继服务，直接在微信中与 Agent 对话。⚠️ 企业微信账号已于 2026-02-26 被腾讯封禁，该通道不再可用。代码保留在仓库中仅供参考
 - **多账号通道支持**：通过界面配置 Telegram、WhatsApp、Discord、Slack、Google Chat、Signal、iMessage、飞书/Lark、LINE、Matrix、Mattermost、Microsoft Teams 等，密钥安全存储（Keychain/DPAPI）
 - **Token 用量追踪**：按模型和服务商实时统计，自动从 OpenClaw 会话文件刷新
 - **语音消息支持**：根据地区自动选择合适的语音识别服务（Groq / 火山引擎）
@@ -72,8 +71,7 @@ pnpm --filter @easyclaw/desktop dev
 easyclaw/
 ├── apps/
 │   ├── desktop/          # Electron 托盘应用（主进程）
-│   ├── panel/            # React 管理界面（由 desktop 提供服务）
-│   └── wecom-relay/      # 企业微信中继服务器（已废弃——账号被腾讯封禁）
+│   └── panel/            # React 管理界面（由 desktop 提供服务）
 ├── packages/
 │   ├── core/             # 共享类型 & Zod schemas
 │   ├── device-id/        # 设备指纹（用于设备标识）
@@ -89,8 +87,7 @@ easyclaw/
 │   └── policy/           # 策略注入器 & 守卫评估器逻辑
 ├── extensions/
 │   ├── easyclaw-policy/  # OpenClaw 策略注入插件壳
-│   ├── file-permissions/ # OpenClaw 文件访问控制插件
-│   └── wecom/            # 企业微信通道插件（已废弃）
+│   └── file-permissions/ # OpenClaw 文件访问控制插件
 ├── scripts/
 │   ├── test-local.sh     # 本地测试流程（构建 + 单元测试 + E2E 测试）
 │   ├── publish-release.sh # 发布 GitHub Release 草稿
@@ -109,13 +106,11 @@ Monorepo 使用 pnpm workspaces（`apps/*`、`packages/*`、`extensions/*`），
 | ------------------------ | -------------------------------------------------------------------------------------- |
 | `@easyclaw/desktop`      | Electron 35 托盘应用。管理网关生命周期，在端口 3210 托管面板服务，数据存储于 SQLite。   |
 | `@easyclaw/panel`        | React 19 + Vite 6 SPA。包含聊天、规则、服务商、通道、权限、语音转文字、用量、技能市场页面，以及首次启动引导向导。  |
-| `@easyclaw/wecom-relay`  | 企业微信中继服务器。*（已废弃——企微账号于 2026-02-26 被腾讯封禁）*    |
 
 ### 扩展
 
 | 包                   | 说明                                                                                         |
 | -------------------- | -------------------------------------------------------------------------------------------- |
-| `@easyclaw/wecom`            | 企业微信通道插件。*（已废弃——企微账号于 2026-02-26 被腾讯封禁）*              |
 | `@easyclaw/easyclaw-policy`  | 薄 OpenClaw 插件壳，将策略注入接入网关的 `before_agent_start` 钩子。                          |
 | `@easyclaw/file-permissions` | OpenClaw 插件，通过在工具调用执行前拦截和验证来强制执行文件访问权限。                          |
 
@@ -187,12 +182,6 @@ pnpm --filter @easyclaw/gateway test
 │  OpenClaw   │    │  面板（React）   │
 │  网关进程    │    │  localhost:3210  │
 └─────────────┘    └─────────────────┘
-         │（extensions/wecom 插件通过 WebSocket 连接）
-         ▼
-┌──────────────────────┐      ┌────────────┐
-│  企业微信中继服务器    │◄─────│  微信用户   │
-│  (apps/wecom-relay)  │      │            │
-└──────────────────────┘      └────────────┘
 ```
 
 桌面应用以**纯托盘模式**运行（macOS 下隐藏 Dock 图标）。它会：

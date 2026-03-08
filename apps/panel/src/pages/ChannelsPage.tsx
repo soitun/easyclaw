@@ -1,9 +1,8 @@
 import { useState, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
-import { deleteChannelAccount, unbindWeComAccount, trackEvent, type ChannelAccountSnapshot } from "../api/index.js";
+import { deleteChannelAccount, trackEvent, type ChannelAccountSnapshot } from "../api/index.js";
 import { pollGatewayReady } from "../lib/poll-gateway.js";
 import { AddChannelAccountModal } from "../components/AddChannelAccountModal.js";
-import { WeComBindingModal } from "../components/WeComBindingModal.js";
 import { MobileBindingModal } from "../components/MobileBindingModal.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { Select } from "../components/Select.js";
@@ -14,9 +13,8 @@ import { ChannelAccountsTable } from "./channels/ChannelAccountsTable.js";
 export function ChannelsPage() {
   const { t, i18n } = useTranslation();
   const {
-    snapshot, loading, error, refreshing, wecomStatus,
-    setWecomStatus,
-    loadChannelStatus, loadWeComStatus,
+    snapshot, loading, error, refreshing,
+    loadChannelStatus,
     handleRefresh,
   } = useChannelsData();
 
@@ -32,8 +30,7 @@ export function ChannelsPage() {
   const [deleteConfirm, setDeleteConfirm] = useState<{ channelId: string; accountId: string; label: string } | null>(null);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
 
-  // WeCom and Mobile binding modals
-  const [wecomModalOpen, setWecomModalOpen] = useState(false);
+  // Mobile binding modal
   const [mobileModalOpen, setMobileModalOpen] = useState(false);
 
   // Dropdown selection state for add account
@@ -42,8 +39,8 @@ export function ChannelsPage() {
   const visibleChannels = getVisibleChannels(i18n.language, selectedDropdownChannel);
 
   const allAccounts = useMemo(
-    () => snapshot ? buildAccountsList(snapshot, wecomStatus, t) : [],
-    [snapshot, wecomStatus, t],
+    () => snapshot ? buildAccountsList(snapshot, t) : [],
+    [snapshot, t],
   );
 
   const handleMobileModalClose = useCallback(() => setMobileModalOpen(false), []);
@@ -54,13 +51,6 @@ export function ChannelsPage() {
 
   function handleAddAccountFromDropdown() {
     if (!selectedDropdownChannel) return;
-
-    // WeCom uses its own binding modal (QR code flow)
-    if (selectedDropdownChannel === "wecom") {
-      setWecomModalOpen(true);
-      setSelectedDropdownChannel("");
-      return;
-    }
 
     // Mobile Chat uses its own binding modal (QR code flow)
     if (selectedDropdownChannel === "mobile") {
@@ -110,9 +100,7 @@ export function ChannelsPage() {
 
   function handleDeleteAccount(channelId: string, accountId: string) {
     let label = channelId;
-    if (channelId === "wecom") {
-      label = t("channels.channelWecom");
-    } else if (channelId === "mobile") {
+    if (channelId === "mobile") {
       label = t("nav.mobile");
     } else {
       const known = KNOWN_CHANNELS.find(c => c.id === channelId);
@@ -132,11 +120,7 @@ export function ChannelsPage() {
     try {
       setDeleteError(null);
 
-      if (channelId === "wecom") {
-        // WeCom uses its own unbind flow
-        await unbindWeComAccount();
-        setWecomStatus(null);
-      } else if (channelId === "mobile") {
+      if (channelId === "mobile") {
         // Disconnect all mobile pairings
         const { disconnectMobilePairing } = await import("../api/mobile-chat.js");
         await disconnectMobilePairing();
@@ -240,18 +224,10 @@ export function ChannelsPage() {
               value={selectedDropdownChannel}
               onChange={setSelectedDropdownChannel}
               placeholder={t("channels.selectChannel")}
-              options={(() => {
-                // 微信客服暂时下线（企业微信号被封，暂停直接接入）
-                // const wecomOption = { value: "wecom", label: t("channels.channelWecom") };
-                const channelOptions = visibleChannels.map(ch => ({
-                  value: ch.id,
-                  label: t(ch.labelKey),
-                }));
-                return channelOptions;
-                // return i18n.language === "zh"
-                //   ? [wecomOption, ...channelOptions]
-                //   : [...channelOptions, wecomOption];
-              })()}
+              options={visibleChannels.map(ch => ({
+                value: ch.id,
+                label: t(ch.labelKey),
+              }))}
               className="select-min-w-200"
             />
             <button
@@ -265,17 +241,6 @@ export function ChannelsPage() {
 
           {/* Tooltip and tutorial link for selected channel */}
           {selectedDropdownChannel && (() => {
-            // 微信客服暂时下线（企业微信号被封，暂停直接接入）
-            // if (selectedDropdownChannel === "wecom") {
-            //   return (
-            //     <div className="channel-info-box">
-            //       <div className="channel-info-title">
-            //         {t("channels.wecomDropdownHint")}
-            //       </div>
-            //     </div>
-            //   );
-            // }
-
             const selected = KNOWN_CHANNELS.find(ch => ch.id === selectedDropdownChannel);
             if (!selected) return null;
 
@@ -325,15 +290,6 @@ export function ChannelsPage() {
         channelLabel={selectedChannelLabel}
         existingAccount={editingAccount}
         onSuccess={handleModalSuccess}
-      />
-
-      {/* WeCom Binding Modal */}
-      <WeComBindingModal
-        isOpen={wecomModalOpen}
-        onClose={() => setWecomModalOpen(false)}
-        onBindingSuccess={() => {
-          loadWeComStatus();
-        }}
       />
 
       {/* Mobile Binding Modal */}

@@ -1,9 +1,6 @@
 /** Well-known secret keys used by EasyClaw. */
 export type SecretKey =
   | "llm-api-key"
-  | "wecom-corp-secret"
-  | "wecom-token"
-  | "wecom-encoding-aes-key"
   | "dingtalk-app-secret"
   | "dingtalk-token"
   | "stt-api-key"

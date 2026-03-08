@@ -1,4 +1,4 @@
-import type { ChannelsStatusSnapshot, ChannelAccountSnapshot, WeComBindingStatusResponse } from "../../api/index.js";
+import type { ChannelsStatusSnapshot, ChannelAccountSnapshot } from "../../api/index.js";
 
 // OpenClaw built-in channels
 export const KNOWN_CHANNELS = [
@@ -43,38 +43,16 @@ export interface AccountEntry {
   channelId: string;
   channelLabel: string;
   account: ChannelAccountSnapshot;
-  isWecom?: boolean;
 }
 
-/** Build the unified accounts list from snapshot + WeCom status, filtering synthetic defaults. */
+/** Build the unified accounts list from snapshot, filtering synthetic defaults. */
 export function buildAccountsList(
   snapshot: ChannelsStatusSnapshot,
-  wecomStatus: WeComBindingStatusResponse | null,
   t: (key: string) => string,
 ): AccountEntry[] {
   const allAccounts: AccountEntry[] = [];
 
-  // Add WeCom virtual account if relay connection exists
-  if (wecomStatus && wecomStatus.connected) {
-    allAccounts.push({
-      channelId: "wecom",
-      channelLabel: t("channels.channelWecom"),
-      isWecom: true,
-      account: {
-        accountId: "default",
-        name: t("channels.channelWecom"),
-        configured: !!wecomStatus.externalUserId,
-        running: true,
-        enabled: true,
-        dmPolicy: "pairing",
-      } as ChannelAccountSnapshot,
-    });
-  }
-
   for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
-    // WeCom is handled as a virtual account above. Skip its raw gateway entries.
-    if (channelId === "wechat") continue;
-
     const knownChannel = KNOWN_CHANNELS.find(c => c.id === channelId);
     const channelLabel = knownChannel ? t(knownChannel.labelKey) : snapshot.channelLabels[channelId] || channelId;
 

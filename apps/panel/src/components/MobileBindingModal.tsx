@@ -70,6 +70,7 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
 
             if (res.code) {
                 const qrContent = res.qrUrl || `https://chat.zhuazhuaai.cn?code=${res.code}`;
+                console.log("[MobilePairing] QR URL:", qrContent);
                 const qrData = await QRCode.toDataURL(qrContent, {
                     margin: 2,
                     width: 250,

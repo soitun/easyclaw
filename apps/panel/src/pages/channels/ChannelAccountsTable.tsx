@@ -479,16 +479,16 @@ export function ChannelAccountsTable({
                 </td>
               </tr>
             ) : (
-              allAccounts.map(({ channelId, channelLabel, account, isWecom }) => {
+              allAccounts.map(({ channelId, channelLabel, account }) => {
                 const rowKey = `${channelId}-${account.accountId}`;
                 const isDeleting = deletingKey === rowKey;
                 const isExpanded = expandedChannels.has(channelId);
                 return (
                   <Fragment key={rowKey}>
                     <tr
-                      className={`table-hover-row${isDeleting ? " row-deleting" : ""}${!isWecom ? " row-expandable" : ""}`}
+                      className={`table-hover-row${isDeleting ? " row-deleting" : ""} row-expandable`}
                       onClick={(e) => {
-                        if (isWecom || isDeleting) return;
+                        if (isDeleting) return;
                         // Don't toggle when clicking buttons or inputs
                         const target = e.target as HTMLElement;
                         if (target.closest("button, a, input, select")) return;
@@ -496,9 +496,7 @@ export function ChannelAccountsTable({
                       }}
                     >
                       <td className="channel-expand-col">
-                        {!isWecom && (
-                          <span className={`expand-chevron${isExpanded ? " expanded" : ""}`}>&#9654;</span>
-                        )}
+                        <span className={`expand-chevron${isExpanded ? " expanded" : ""}`}>&#9654;</span>
                       </td>
                       <td className="font-medium">{channelLabel}</td>
                       <td>{account.name || "\u2014"}</td>
@@ -507,7 +505,7 @@ export function ChannelAccountsTable({
                       <td>{account.dmPolicy ? t(`channels.dmPolicyLabel_${account.dmPolicy}`, { defaultValue: account.dmPolicy }) : "\u2014"}</td>
                       <td>
                         <div className="td-actions">
-                          {isWecom || channelId === "mobile" ? (
+                          {channelId === "mobile" ? (
                             <button className="btn btn-secondary btn-invisible" disabled aria-hidden="true">{t("common.edit")}</button>
                           ) : (
                             <button
@@ -528,7 +526,7 @@ export function ChannelAccountsTable({
                         </div>
                       </td>
                     </tr>
-                    {isExpanded && !isWecom && renderExpandedRow(channelId)}
+                    {isExpanded && renderExpandedRow(channelId)}
                   </Fragment>
                 );
               })

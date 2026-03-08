@@ -87,21 +87,14 @@ describe("resolveSecretEnv", () => {
     const env = await resolveSecretEnv(store);
     expect(env["OPENAI_API_KEY"]).toBe("sk-test");
     expect(env).not.toHaveProperty("ANTHROPIC_API_KEY");
-    expect(env).not.toHaveProperty("WECOM_CORP_SECRET");
   });
 
   it("should inject non-LLM static secrets", async () => {
     const store = new MockSecretStore({
-      "wecom-corp-secret": "wecom-secret",
-      "wecom-token": "wecom-tok",
-      "wecom-encoding-aes-key": "wecom-aes",
       "stt-api-key": "stt-key",
     });
 
     const env = await resolveSecretEnv(store);
-    expect(env["WECOM_CORP_SECRET"]).toBe("wecom-secret");
-    expect(env["WECOM_TOKEN"]).toBe("wecom-tok");
-    expect(env["WECOM_ENCODING_AES_KEY"]).toBe("wecom-aes");
     expect(env["STT_API_KEY"]).toBe("stt-key");
   });
 });
