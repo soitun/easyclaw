@@ -41,7 +41,11 @@ describe("MobileSyncEngine", () => {
     let engine: MobileSyncEngine;
 
     beforeEach(() => {
-        mockApi = {};
+        mockApi = {
+            runtime: {
+                config: { loadConfig: () => ({}) },
+            },
+        };
         vi.clearAllMocks();
         transport = createMockTransport();
         engine = new MobileSyncEngine(

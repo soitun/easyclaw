@@ -2,6 +2,7 @@
   "name": "@easyclaw/desktop",
   "version": "1.6.2",
   "private": true,
+  "type": "module",
   "main": "dist/main.cjs",
   "author": "EasyClaw",
   "homepage": "https://www.easy-claw.com",

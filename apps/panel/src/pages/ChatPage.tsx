@@ -65,6 +65,8 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
   const shouldInstantScrollRef = useRef(true);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [externalPending, setExternalPending] = useState(false);
+  const externalPendingRef = useRef(false);
 
   // Session manager — polls sessions.list and handles switching + caching
   const sessionManager = useSessionManager({
@@ -87,6 +89,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
       shouldInstantScrollRef.current = true; stickyRef.current = true;
       fetchLimitRef.current = FETCH_BATCH;
       isFetchingRef.current = false;
+      setExternalPending(false); externalPendingRef.current = false;
       if (state.trackerSnapshot) {
         trackerRef.current.restore(state.trackerSnapshot);
       } else {
@@ -706,6 +709,11 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
           },
           onUserMessage: (msg) => {
             if (cancelled) return;
+            // Only append to the currently viewed session
+            if (msg.sessionKey !== sessionKeyRef.current) {
+              markUnreadRef.current(msg.sessionKey);
+              return;
+            }
             setMessages((prev) => [...prev, {
               role: "user",
               text: msg.text,
@@ -713,6 +721,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
               isExternal: true,
               channel: msg.channel,
             }]);
+            setExternalPending(true); externalPendingRef.current = true;
           },
           onSessionReset: (sessionKey) => {
             if (cancelled) return;
@@ -721,6 +730,94 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
             clearImages(sessionKeyRef.current).catch(() => {});
             trackerRef.current.reset();
             lastAgentStreamRef.current = null;
+            setExternalPending(false); externalPendingRef.current = false;
+          },
+          onMirrorEvent: (mirror) => {
+            if (cancelled) return;
+            const data = mirror.data as Record<string, unknown>;
+
+            if (mirror.stream === "assistant") {
+              // Raw agent event data: { text: "accumulated", delta: "incremental" }
+              // Convert to chat event format expected by handleEvent for "chat" events
+              const text = data.text as string | undefined;
+              if (text) {
+                // Clear externalPending now — streaming text provides visual feedback
+                // via the streaming bubble, so the thinking bubble is no longer needed.
+                if (externalPendingRef.current && mirror.sessionKey === sessionKeyRef.current) {
+                  setExternalPending(false); externalPendingRef.current = false;
+                }
+                handleEvent({
+                  type: "event",
+                  event: "chat",
+                  payload: {
+                    runId: mirror.runId,
+                    sessionKey: mirror.sessionKey,
+                    state: "delta",
+                    message: {
+                      role: "assistant",
+                      content: [{ type: "text", text }],
+                      timestamp: Date.now(),
+                    },
+                  },
+                });
+              }
+            } else if (mirror.stream === "lifecycle") {
+              const phase = data.phase as string | undefined;
+              if (phase === "start") {
+                // Register the external run in the tracker so view.isActive
+                // becomes true and the thinking bubble stays visible even if
+                // externalPending gets cleared before streaming text arrives.
+                if (mirror.sessionKey === sessionKeyRef.current) {
+                  trackerRef.current.dispatch({
+                    type: "EXTERNAL_INBOUND",
+                    runId: mirror.runId,
+                    sessionKey: mirror.sessionKey,
+                    channel: "unknown",
+                  });
+                  trackerRef.current.dispatch({ type: "LIFECYCLE_START", runId: mirror.runId });
+                }
+              } else if (phase === "end" || phase === "error") {
+                // Clear externalPending — run is done
+                if (externalPendingRef.current && mirror.sessionKey === sessionKeyRef.current) {
+                  setExternalPending(false); externalPendingRef.current = false;
+                }
+                // Lifecycle end/error → chat final/error so run completes properly
+                handleEvent({
+                  type: "event",
+                  event: "chat",
+                  payload: {
+                    runId: mirror.runId,
+                    sessionKey: mirror.sessionKey,
+                    state: phase === "error" ? "error" : "final",
+                    ...(phase === "error" ? { errorMessage: data.error } : {}),
+                  },
+                });
+              }
+            } else if (mirror.stream === "tool") {
+              // Extract delivered message text from Message tool calls
+              const toolName = data.name as string | undefined;
+              const toolPhase = data.phase as string | undefined;
+              const toolArgs = data.args as Record<string, unknown> | undefined;
+              // Forward tool event first — handleEvent's agent path flushes
+              // streaming text on tool_start, so ordering is preserved.
+              handleEvent({
+                type: "event",
+                event: "agent",
+                payload: {
+                  runId: mirror.runId,
+                  sessionKey: mirror.sessionKey,
+                  stream: "tool",
+                  data,
+                },
+              });
+              // Then extract delivered message text from Message tool calls
+              if (toolName === "message" && toolPhase === "start" && toolArgs) {
+                const msgText = (toolArgs.message ?? toolArgs.text ?? toolArgs.content) as string | undefined;
+                if (msgText && mirror.sessionKey === sessionKeyRef.current) {
+                  setMessages((prev) => [...prev, { role: "assistant", text: msgText, timestamp: Date.now() }]);
+                }
+              }
+            }
           },
         });
         bridge.connect();
@@ -934,10 +1031,11 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
             const hasImages = msg.images && msg.images.length > 0;
             // Skip empty bubbles (text stripped by cleanMessageText and no images)
             if (!cleaned && !hasImages) return null;
-            // External user messages (from Telegram, Chrome, etc.) go on the left
-            const isLocalUser = msg.role === "user" && !msg.isExternal;
-            const wrapClass = isLocalUser ? "chat-bubble-wrap-user" : "chat-bubble-wrap-assistant";
-            const bubbleClass = isLocalUser ? "chat-bubble-user" : msg.isExternal ? "chat-bubble-external" : "chat-bubble-assistant";
+            // User messages always align right (both local and external).
+            // External assistant messages go left with a distinct visual style.
+            const isUserRole = msg.role === "user";
+            const wrapClass = isUserRole ? "chat-bubble-wrap-user" : "chat-bubble-wrap-assistant";
+            const bubbleClass = isUserRole ? "chat-bubble-user" : msg.isExternal ? "chat-bubble-external" : "chat-bubble-assistant";
             return (
             <div key={i} className={`chat-bubble-wrap ${wrapClass}`}>
               {msg.timestamp > 0 && (
@@ -974,7 +1072,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
             // When streaming text is visible, it IS the visual feedback —
             // showing both would cause duplicate/overlapping bubbles.
             const showThinking = streaming === null && (
-              runId !== null || (view.isActive && view.displayPhase !== "done")
+              runId !== null || externalPending || (view.isActive && view.displayPhase !== "done")
             );
             return showThinking ? (
               <div className="chat-bubble chat-bubble-assistant chat-thinking">

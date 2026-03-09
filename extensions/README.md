@@ -12,7 +12,6 @@ electron-builder.yml.
 | `easyclaw-policy` | Hook | Injects compiled policies and guard directives into system prompt |
 | `file-permissions` | Hook | Validates file operations against permission policies |
 | `search-browser-fallback` | Hook (single-file) | Falls back to browser search when `web_search` fails |
-| `wecom` | Channel | WeCom/WeChat messaging channel integration |
 
 ### easyclaw-tools: Tool Status
 
@@ -47,7 +46,7 @@ section remains in the system prompt but is effectively overridden.
 EasyClaw points `plugins.load.paths` at the **entire `extensions/` directory**.
 OpenClaw's `discoverInDirectory()` scans each subdirectory and discovers plugins via:
 
-1. `package.json` with `openclaw.extensions` field (channel plugins like wecom)
+1. `package.json` with `openclaw.extensions` field (channel plugins)
 2. `index.ts` / `index.mjs` fallback (hook plugins like search-browser-fallback)
 3. `openclaw.plugin.json` manifest validation (subdirs without it are skipped)
 
@@ -100,7 +99,7 @@ on-the-fly by OpenClaw's jiti loader.
 
 ### Pattern B: Channel plugin (built with tsdown)
 
-For channel integrations with dependencies and build output. Example: `wecom/`.
+For channel integrations with dependencies and build output.
 
 ```
 my-channel/

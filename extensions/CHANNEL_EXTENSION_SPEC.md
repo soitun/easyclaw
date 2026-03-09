@@ -5,7 +5,6 @@ How to build a channel extension that integrates with OpenClaw's gateway, routin
 Reference implementations:
 - **Telegram** (full-featured, direct): `vendor/openclaw/extensions/telegram/`
 - **Google Chat** (OAuth, direct): `vendor/openclaw/extensions/googlechat/`
-- **WeCom/WeChat** (relay-based): `extensions/wecom/`
 
 ---
 
@@ -81,12 +80,12 @@ extensions/mychannel/
 
 ```ts
 type ChannelMeta = {
-  id: string;              // Channel identifier (e.g. "telegram", "wechat")
+  id: string;              // Channel identifier (e.g. "telegram", "discord")
   label: string;           // Display name (e.g. "Telegram")
-  selectionLabel: string;  // Shown in channel picker (e.g. "WeChat (微信)")
+  selectionLabel: string;  // Shown in channel picker (e.g. "Telegram")
   docsPath: string;        // Documentation URL path
   blurb: string;           // Short description
-  aliases?: string[];      // Alternative IDs (e.g. ["wecom"] for wechat)
+  aliases?: string[];      // Alternative IDs for backward compatibility
   order?: number;          // Sort order in UI lists
 };
 ```
@@ -147,7 +146,7 @@ type ChannelConfigAdapter<ResolvedAccount> = {
 };
 ```
 
-For channels with no account management (like WeCom relay):
+For channels with no account management (e.g. relay-based channels):
 ```ts
 config: {
   listAccountIds: () => [],
@@ -213,7 +212,7 @@ What `sendText()` / `sendMedia()` must return:
 
 ```ts
 type OutboundDeliveryResult = {
-  channel: string;       // Channel ID (e.g. "wechat")
+  channel: string;       // Channel ID (e.g. "telegram")
   messageId: string;     // Sent message ID
   chatId?: string;       // Chat/conversation ID
 };
@@ -224,12 +223,12 @@ type OutboundDeliveryResult = {
 | Mode | Description | Use When |
 |------|-------------|----------|
 | `"direct"` | Plugin sends messages directly to the platform API | Standard channels (Telegram, Discord) |
-| `"gateway"` | Delivery handled by the gateway/desktop app | Relay-based channels (WeCom) |
+| `"gateway"` | Delivery handled by the gateway/desktop app | Relay-based channels |
 | `"hybrid"` | Can use either path | Channels with both local and remote modes |
 
 ### Gateway-Mode Outbound (Relay Pattern)
 
-For channels like WeCom where delivery is handled outside the plugin:
+For relay-based channels where delivery is handled outside the plugin:
 
 ```js
 outbound: {
@@ -237,12 +236,12 @@ outbound: {
   textChunkLimit: 2048,
   async sendText({ to, text }) {
     // Stub — text delivery handled via chat events → panel-server → relay.
-    return { channel: "wechat", messageId: "", chatId: to ?? "" };
+    return { channel: "mychannel", messageId: "", chatId: to ?? "" };
   },
   async sendMedia({ to, text, mediaUrl }) {
     // Queue for panel-server (see "Image Outbound for Relay Channels" below).
     pendingImages.push({ to: to ?? "", mediaUrl: mediaUrl ?? "", text: text ?? "" });
-    return { channel: "wechat", messageId: "", chatId: to ?? "" };
+    return { channel: "mychannel", messageId: "", chatId: to ?? "" };
   },
 },
 ```
@@ -345,7 +344,7 @@ Platform Webhook → Channel Plugin Gateway Adapter → OpenClaw Inbound Pipelin
 
 The gateway adapter (`gateway.startAccount()`) sets up listeners that feed messages into the OpenClaw pipeline.
 
-### Relay Path (WeCom Pattern)
+### Relay Path
 
 For channels that use an external relay server:
 
@@ -587,7 +586,7 @@ Common errors:
 
 ## 12. Relay Server Pattern (Optional)
 
-For platforms behind firewalls or requiring server-to-server webhooks (WeCom, custom APIs).
+For platforms behind firewalls or requiring server-to-server webhooks.
 
 ### Architecture
 
@@ -699,7 +698,7 @@ configSchema: buildChannelConfigSchema(schema),
 - [ ] Set `capabilities.media: true`
 - [ ] Inbound: download image, base64 encode, pass as `attachments`
 - [ ] Outbound: extract `type === "image"` blocks from agent response content
-- [ ] Platform image upload API if needed (e.g. WeCom media/upload)
+- [ ] Platform image upload API if needed
 
 ### For Voice
 

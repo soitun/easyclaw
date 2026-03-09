@@ -1,0 +1,10 @@
+{
+  "id": "easyclaw-event-bridge",
+  "name": "EasyClaw Event Bridge",
+  "description": "Mirrors agent events from all channels to the Chat Page, bypassing the webchat-only gate",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

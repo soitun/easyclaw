@@ -1,8 +1,56 @@
 import { randomUUID } from "node:crypto";
-import { join, dirname } from "node:path";
+import { join, dirname, basename, extname } from "node:path";
 import { homedir } from "node:os";
+import { URL, fileURLToPath } from "node:url";
 import fs from "node:fs/promises";
 import { RelayTransport } from './relay-transport';
+
+const HTTP_URL_RE = /^https?:\/\//i;
+
+/**
+ * Fetch a remote URL into a Buffer.  Throws on HTTP errors so callers can
+ * fall back gracefully.
+ */
+async function fetchToBuffer(url: string): Promise<Buffer> {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Read media from a local path or remote URL.
+ * Returns { buf, fileName, ext } or throws on failure.
+ */
+async function readMediaSource(source: string): Promise<{ buf: Buffer; fileName: string; ext: string }> {
+    if (HTTP_URL_RE.test(source)) {
+        const buf = await fetchToBuffer(source);
+        let fileName: string | null;
+        try {
+            const pathname = new URL(source).pathname;
+            fileName = basename(pathname);
+            if (!fileName || fileName === "/") fileName = null;
+        } catch { fileName = null; }
+        if (!fileName) fileName = `media-${Date.now()}`;
+        const ext = extname(fileName).toLowerCase();
+        return { buf, fileName, ext };
+    }
+    // Convert file:// URLs to local paths.
+    let localPath = source;
+    if (/^file:\/\//i.test(localPath)) {
+        localPath = fileURLToPath(localPath);
+    }
+    // Expand leading ~ to home directory (Node fs doesn't do this automatically).
+    // Handle both Unix ~/path and Windows ~\path.
+    if (localPath.startsWith("~/") || localPath.startsWith("~\\")) {
+        localPath = homedir() + localPath.slice(1);
+    } else if (localPath === "~") {
+        localPath = homedir();
+    }
+    const buf = await fs.readFile(localPath);
+    const fileName = basename(localPath);
+    const ext = extname(localPath).toLowerCase();
+    return { buf, fileName, ext };
+}
 
 // Ensure the local media directory exists.
 const MEDIA_DIR = join(homedir(), ".easyclaw", "openclaw", "media", "inbound", "mobile");
@@ -13,6 +61,28 @@ const OUTBOX_LIMIT = 500;
 const ACK_TIMEOUT_MS = 5 * 60_000; // 5 minutes
 const SAVE_DEBOUNCE_MS = 500;
 const PROCESSED_IDS_LIMIT = 1000;
+
+// Duplicated from index.ts to avoid circular imports (index re-exports this module).
+const RELAY_MAX_CLIENT_BYTES = 14 * 1024 * 1024; // 14 MB
+const RELAY_MAX_CLIENT_MB = Math.floor(RELAY_MAX_CLIENT_BYTES / (1024 * 1024));
+
+const MIME_BY_EXT: Record<string, string> = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+    ".pdf": "application/pdf",
+    ".txt": "text/plain", ".md": "text/markdown", ".csv": "text/csv",
+    ".json": "application/json", ".xml": "application/xml",
+    ".zip": "application/zip", ".gz": "application/gzip",
+    ".doc": "application/msword",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xls": "application/vnd.ms-excel",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg",
+    ".mp4": "video/mp4", ".webm": "video/webm",
+};
 
 export class MobileSyncEngine {
     private outbox: Map<string, any> = new Map();
@@ -205,6 +275,49 @@ export class MobileSyncEngine {
             sender: "desktop",
             timestamp: Date.now(),
         });
+    }
+
+    /**
+     * Read a local file or remote URL, convert to base64, and queue an image/file outbound message.
+     * Supports both local file paths and HTTP(S) URLs (e.g. DALL-E image URLs).
+     * Falls back to a text placeholder on read errors or if the file exceeds the relay size limit.
+     */
+    private async deliverMediaFile(source: string, caption: string) {
+        try {
+            const { buf, fileName, ext } = await readMediaSource(source);
+            if (buf.length === 0) {
+                this.queueOutbound(this.pairingId, {
+                    type: "file",
+                    data: "",
+                    mimeType: MIME_BY_EXT[ext] || "application/octet-stream",
+                    text: caption,
+                    fileName,
+                });
+                return;
+            }
+            if (buf.length > RELAY_MAX_CLIENT_BYTES) {
+                const sizeMB = (buf.length / (1024 * 1024)).toFixed(1);
+                console.error(`[MobileSync] File too large (${sizeMB} MB), skipping send: ${source}`);
+                this.queueOutbound(this.pairingId, {
+                    type: "text",
+                    text: `[File too large: ${sizeMB} MB, limit is ${RELAY_MAX_CLIENT_MB} MB]`,
+                });
+                return;
+            }
+            const mimeType = MIME_BY_EXT[ext] || "application/octet-stream";
+            const isImage = mimeType.startsWith("image/");
+            const b64 = buf.toString("base64");
+            this.queueOutbound(this.pairingId, {
+                type: isImage ? "image" : "file",
+                data: b64,
+                mimeType,
+                text: caption,
+                fileName,
+            });
+        } catch (err: any) {
+            console.error("[MobileSync] Failed to read media source:", source, err.message);
+            this.queueOutbound(this.pairingId, { type: "text", text: caption || "[File]" });
+        }
     }
 
     /** Reset the agent session: update session store, archive transcripts, and clear engine state. */
@@ -477,6 +590,18 @@ export class MobileSyncEngine {
             });
             this.activeSessionKeys.add(route.sessionKey);
 
+            // Notify connected Chat Page clients that a mobile user message arrived,
+            // so it appears in the conversation in real time (not only after sync).
+            if (this.gatewayBroadcast) {
+                this.gatewayBroadcast("mobile.inbound", {
+                    sessionKey: route.sessionKey,
+                    message: messageText,
+                    timestamp: msg.timestamp || Date.now(),
+                    channel: "mobile",
+                    ...(mediaPaths.length > 0 ? { mediaPaths } : {}),
+                });
+            }
+
             const envelopeOptions = core.channel.reply.resolveEnvelopeFormatOptions(cfg);
             const storePath = core.channel.session.resolveStorePath(
                 (cfg.session as Record<string, unknown> | undefined)?.store as string | undefined,
@@ -541,17 +666,45 @@ export class MobileSyncEngine {
                     dispatcherOptions: {
                         deliver: async (replyPayload: any, info: { kind: string }) => {
                             const text = (replyPayload.text ?? "").replace(/\bNO_REPLY\b/g, "").trim();
-                            if (!text) return;
+
+                            // Collect media URLs from the reply payload.
+                            const mediaUrls: string[] = Array.isArray(replyPayload.mediaUrls)
+                                ? replyPayload.mediaUrls.filter((u: unknown) => typeof u === "string" && u)
+                                : [];
+                            if (typeof replyPayload.mediaUrl === "string" && replyPayload.mediaUrl) {
+                                mediaUrls.push(replyPayload.mediaUrl);
+                            }
+
+                            if (!text && mediaUrls.length === 0) return;
+
                             if (info.kind === "block") {
-                                lastBlockText = text;
-                                repliesDelivered = true;
-                                this.queueOutbound(this.pairingId, { type: "text", text });
+                                // Block streaming: deliver media immediately since the
+                                // final payload may be suppressed when blocks succeed.
+                                for (const filePath of mediaUrls) {
+                                    await this.deliverMediaFile(filePath, "");
+                                }
+                                if (mediaUrls.length > 0) repliesDelivered = true;
+                                if (text) {
+                                    lastBlockText = text;
+                                    repliesDelivered = true;
+                                    this.queueOutbound(this.pairingId, { type: "text", text });
+                                }
                                 return;
                             }
-                            // Skip final reply if it matches the last block (already delivered)
-                            if (info.kind === "final" && text === lastBlockText) return;
-                            repliesDelivered = true;
-                            this.queueOutbound(this.pairingId, { type: "text", text });
+
+                            // Final reply: send media files first, then text (if not already sent as block).
+                            for (const filePath of mediaUrls) {
+                                await this.deliverMediaFile(filePath, "");
+                            }
+                            if (mediaUrls.length > 0) {
+                                repliesDelivered = true;
+                            }
+
+                            // Skip final text if it matches the last block (already delivered)
+                            if (text && !(info.kind === "final" && text === lastBlockText)) {
+                                repliesDelivered = true;
+                                this.queueOutbound(this.pairingId, { type: "text", text });
+                            }
                         },
                         onError: (err: any, info: any) => {
                             console.error(`[MobileSync] ${info.kind} reply failed:`, err);

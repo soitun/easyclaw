@@ -86,12 +86,16 @@ easyclaw/
 │   ├── telemetry/        # 隐私优先的匿名分析客户端
 │   └── policy/           # 策略注入器 & 守卫评估器逻辑
 ├── extensions/
-│   ├── easyclaw-policy/  # OpenClaw 策略注入插件壳
-│   └── file-permissions/ # OpenClaw 文件访问控制插件
+│   ├── easyclaw-policy/      # OpenClaw 策略注入插件壳
+│   ├── easyclaw-tools/       # 仅限所有者的自定义工具插件
+│   ├── file-permissions/     # OpenClaw 文件访问控制插件
+│   └── mobile-chat-channel/  # 移动端消息中继插件
 ├── scripts/
-│   ├── test-local.sh     # 本地测试流程（构建 + 单元测试 + E2E 测试）
-│   ├── publish-release.sh # 发布 GitHub Release 草稿
-│   └── rebuild-native.sh # 预编译 better-sqlite3（Node.js + Electron）
+│   ├── test-local.sh             # 本地测试流程（构建 + 单元测试 + E2E 测试）
+│   ├── publish-release.sh        # 发布 GitHub Release 草稿
+│   ├── rebuild-native.sh         # 预编译 better-sqlite3（Node.js + Electron）
+│   ├── smoke-test-vendor.cjs     # Vendor 网关启动冒烟测试
+│   └── verify-vendor-bundle.cjs  # 干跑 Bundle 验证（发版前检查）
 └── vendor/
     └── openclaw/         # 内置的 OpenClaw（gitignored）
 ```
@@ -111,8 +115,10 @@ Monorepo 使用 pnpm workspaces（`apps/*`、`packages/*`、`extensions/*`），
 
 | 包                   | 说明                                                                                         |
 | -------------------- | -------------------------------------------------------------------------------------------- |
-| `@easyclaw/easyclaw-policy`  | 薄 OpenClaw 插件壳，将策略注入接入网关的 `before_agent_start` 钩子。                          |
-| `@easyclaw/file-permissions` | OpenClaw 插件，通过在工具调用执行前拦截和验证来强制执行文件访问权限。                          |
+| `@easyclaw/easyclaw-policy`      | 薄 OpenClaw 插件壳，将策略注入接入网关的 `before_agent_start` 钩子。                    |
+| `@easyclaw/easyclaw-tools`       | 仅限所有者的自定义工具插件（如系统控制、桌面集成）。                                    |
+| `@easyclaw/file-permissions`     | OpenClaw 插件，通过在工具调用执行前拦截和验证来强制执行文件访问权限。                    |
+| `@easyclaw/mobile-chat-channel`  | 移动端 PWA 消息中继 — 通过 WebSocket 将移动端聊天客户端桥接到网关。                     |
 
 ### 包
 
@@ -136,12 +142,14 @@ Monorepo 使用 pnpm workspaces（`apps/*`、`packages/*`、`extensions/*`），
 大部分根目录脚本通过 Turbo 运行：
 
 ```bash
-pnpm build        # 构建所有包（遵循依赖图）
-pnpm dev          # 以开发模式运行 desktop + panel
-pnpm test         # 运行所有测试（vitest）
-pnpm lint         # 检查所有包（oxlint）
-pnpm format       # 检查格式（oxfmt，直接运行）
-pnpm format:fix   # 自动修复格式（oxfmt，直接运行）
+pnpm build              # 构建所有包（遵循依赖图）
+pnpm dev                # 以开发模式运行 desktop + panel
+pnpm test               # 运行所有测试（vitest）
+pnpm lint               # 检查所有包（oxlint）
+pnpm format             # 检查格式（oxfmt，直接运行）
+pnpm format:fix         # 自动修复格式（oxfmt，直接运行）
+pnpm smoke-test:vendor  # 快速 Vendor 网关启动检查（约 2 秒）
+pnpm verify:bundle      # 完整干跑 Bundle 验证（约 18 秒，发版前运行）
 ```
 
 ### 单包命令

@@ -47,7 +47,11 @@ describe('MobileSyncEngine', () => {
     let engine: MobileSyncEngine;
 
     beforeEach(() => {
-        api = {};
+        api = {
+            runtime: {
+                config: { loadConfig: () => ({}) },
+            },
+        };
         vi.clearAllMocks();
         vi.useFakeTimers();
         transport = createMockTransport();
@@ -141,8 +145,10 @@ describe('MobileSyncEngine', () => {
     it('should send error notification to mobile when processing fails', async () => {
         // Set up an api that will throw
         (engine as any).api = {
-            runtime: { channel: { routing: { resolveAgentRoute: () => { throw new Error('agent exploded'); } } } },
-            config: {},
+            runtime: {
+                config: { loadConfig: () => ({}) },
+                channel: { routing: { resolveAgentRoute: () => { throw new Error('agent exploded'); } } },
+            },
         };
         await engine.start();
         transport.send.mockClear();

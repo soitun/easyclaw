@@ -66,7 +66,9 @@ export class RelayTransport {
 
     send(pairingId: string, message: object): void {
         if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
-        this.ws.send(JSON.stringify({ ...message, pairingId }));
+        this.ws.send(JSON.stringify({ ...message, pairingId }), (err) => {
+            if (err) console.error(`[DesktopRelayTransport] ws.send error:`, err);
+        });
     }
 
     registerHandler(pairingId: string, handler: MessageHandler): void {

@@ -86,12 +86,16 @@ easyclaw/
 │   ├── telemetry/        # Privacy-first anonymous analytics client
 │   └── policy/           # Policy injector & guard evaluator logic
 ├── extensions/
-│   ├── easyclaw-policy/  # OpenClaw plugin shell for policy injection
-│   └── file-permissions/ # OpenClaw plugin for file access control
+│   ├── easyclaw-policy/      # OpenClaw plugin shell for policy injection
+│   ├── easyclaw-tools/       # Owner-only custom tools plugin
+│   ├── file-permissions/     # OpenClaw plugin for file access control
+│   └── mobile-chat-channel/  # Mobile messaging relay plugin
 ├── scripts/
-│   ├── test-local.sh     # Local test pipeline (build + unit + e2e tests)
-│   ├── publish-release.sh # Publish draft GitHub Release
-│   └── rebuild-native.sh # Prebuild better-sqlite3 for Node.js + Electron
+│   ├── test-local.sh             # Local test pipeline (build + unit + e2e tests)
+│   ├── publish-release.sh        # Publish draft GitHub Release
+│   ├── rebuild-native.sh         # Prebuild better-sqlite3 for Node.js + Electron
+│   ├── smoke-test-vendor.cjs     # Vendor gateway startup smoke test
+│   └── verify-vendor-bundle.cjs  # Dry-run bundle verification (pre-release check)
 └── vendor/
     └── openclaw/         # Vendored OpenClaw binary (gitignored)
 ```
@@ -111,8 +115,10 @@ The monorepo uses pnpm workspaces (`apps/*`, `packages/*`, `extensions/*`) with 
 
 | Package              | Description                                                                                                                    |
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `@easyclaw/easyclaw-policy`  | Thin OpenClaw plugin shell that wires policy injection into the gateway's `before_agent_start` hook.                           |
-| `@easyclaw/file-permissions` | OpenClaw plugin that enforces file access permissions by intercepting and validating tool calls before execution.               |
+| `@easyclaw/easyclaw-policy`      | Thin OpenClaw plugin shell that wires policy injection into the gateway's `before_agent_start` hook.                     |
+| `@easyclaw/easyclaw-tools`       | Owner-only custom tools plugin (e.g. system control, desktop integration).                                              |
+| `@easyclaw/file-permissions`     | OpenClaw plugin that enforces file access permissions by intercepting and validating tool calls before execution.        |
+| `@easyclaw/mobile-chat-channel`  | Mobile PWA messaging relay — bridges mobile chat clients to the gateway via WebSocket.                                  |
 
 ### Packages
 
@@ -136,12 +142,14 @@ The monorepo uses pnpm workspaces (`apps/*`, `packages/*`, `extensions/*`) with 
 Most root scripts run through Turbo:
 
 ```bash
-pnpm build        # Build all packages (respects dependency graph)
-pnpm dev          # Run desktop + panel in dev mode
-pnpm test         # Run all tests (vitest)
-pnpm lint         # Lint all packages (oxlint)
-pnpm format       # Check formatting (oxfmt, runs directly)
-pnpm format:fix   # Auto-fix formatting (oxfmt, runs directly)
+pnpm build              # Build all packages (respects dependency graph)
+pnpm dev                # Run desktop + panel in dev mode
+pnpm test               # Run all tests (vitest)
+pnpm lint               # Lint all packages (oxlint)
+pnpm format             # Check formatting (oxfmt, runs directly)
+pnpm format:fix         # Auto-fix formatting (oxfmt, runs directly)
+pnpm smoke-test:vendor  # Quick vendor gateway startup check (~2s)
+pnpm verify:bundle      # Full dry-run bundle verification (~18s, run before releases)
 ```
 
 ### Per-package

@@ -36,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import { execSync } from "node:child_process";
 import { createConnection } from "node:net";
 import { existsSync, unlinkSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { homedir } from "node:os";
 import { createTrayIcon } from "./tray-icon.js";
 import { buildTrayMenu } from "./tray-menu.js";
@@ -454,6 +455,10 @@ app.whenReady().then(async () => {
           rpcClient?.request("mobile_chat_register_stale", { pairings: stalePairings })
             .catch((e: unknown) => log.error("Failed to register stale mobile pairings:", e));
         }
+
+        // Initialize event bridge plugin so it captures the gateway broadcast function
+        rpcClient?.request("event_bridge_init", {})
+          .catch((e: unknown) => log.debug("Event bridge init (may not be loaded):", e));
       },
       onClose: () => {
         log.info("Gateway RPC client disconnected");
@@ -463,6 +468,46 @@ app.whenReady().then(async () => {
           const payload = evt.payload as { sessionKey?: string } | undefined;
           if (payload?.sessionKey) {
             pushChatSSE("session-reset", { sessionKey: payload.sessionKey });
+          }
+        }
+        if (evt.event === "easyclaw.chat-mirror") {
+          const p = evt.payload as {
+            runId: string;
+            sessionKey: string;
+            stream: string;  // "assistant" | "lifecycle" | "tool"
+            data: unknown;
+            seq?: number;
+          };
+          pushChatSSE("chat-mirror", p);
+        }
+        if (evt.event === "mobile.inbound") {
+          const p = evt.payload as { sessionKey?: string; message?: string; timestamp?: number; channel?: string; mediaPaths?: string[] } | undefined;
+          if (p?.sessionKey && p?.message) {
+            // Auto-unarchive the session so it appears in Active sessions,
+            // even when the Panel UI is closed.
+            const session = storage.chatSessions.getByKey(p.sessionKey);
+            if (session?.archivedAt) {
+              storage.chatSessions.upsert(p.sessionKey, { archivedAt: null });
+            }
+            // Convert absolute media file paths to panel-server /api/media/ URLs.
+            const MEDIA_DIR_SEG = "/openclaw/media/";
+            const mediaUrls: string[] = [];
+            if (Array.isArray(p.mediaPaths)) {
+              for (const fp of p.mediaPaths) {
+                const idx = fp.indexOf(MEDIA_DIR_SEG);
+                if (idx >= 0) {
+                  mediaUrls.push(`/api/media/${fp.slice(idx + MEDIA_DIR_SEG.length)}`);
+                }
+              }
+            }
+            pushChatSSE("inbound", {
+              runId: randomUUID(),
+              sessionKey: p.sessionKey,
+              channel: p.channel || "mobile",
+              message: p.message,
+              timestamp: p.timestamp || Date.now(),
+              ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
+            });
           }
         }
       },

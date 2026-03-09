@@ -30,14 +30,27 @@ export interface ToolSSEPayload {
   toolName?: string;
 }
 
+/** Mirrors agent events for non-webchat channels (Telegram, Feishu, Mobile, etc.) */
+export interface ChatMirrorSSEPayload {
+  runId: string;
+  sessionKey: string;
+  stream: "assistant" | "lifecycle" | "tool";
+  data: unknown;
+  seq?: number;
+}
+
 // ---------------------------------------------------------------------------
 // ChatEventBridge
 // ---------------------------------------------------------------------------
 
 export type ChatEventBridgeCallbacks = {
   onAction: (action: RunAction) => void;
-  onUserMessage: (msg: { text: string; timestamp: number; channel: string }) => void;
+  onUserMessage: (msg: { text: string; timestamp: number; channel: string; sessionKey: string }) => void;
   onSessionReset?: (sessionKey: string) => void;
+  /** Called when a chat-mirror event arrives for a non-webchat channel.
+   *  The consumer should feed this into the same handleEvent logic used for
+   *  WebSocket agent events so rendering is identical. */
+  onMirrorEvent?: (payload: ChatMirrorSSEPayload) => void;
 };
 
 export class ChatEventBridge {
@@ -63,13 +76,13 @@ export class ChatEventBridge {
           text: data.message,
           timestamp: data.timestamp,
           channel: data.channel,
-        });
-        this.callbacks.onAction({
-          type: "EXTERNAL_INBOUND",
-          runId: data.runId,
           sessionKey: data.sessionKey,
-          channel: data.channel,
         });
+        // NOTE: We intentionally do NOT dispatch EXTERNAL_INBOUND here.
+        // The gateway's own chat.delta event auto-registers the run with
+        // the correct runId (see ChatPage.tsx ~line 441). Dispatching here
+        // with a potentially mismatched runId created phantom "queued" runs
+        // that never completed.
       } catch (err) {
         console.warn("[chat-event-bridge] malformed inbound SSE data:", err);
       }
@@ -103,6 +116,15 @@ export class ChatEventBridge {
         }
       } catch (err) {
         console.warn("[chat-event-bridge] malformed session-reset SSE data:", err);
+      }
+    });
+
+    sse.addEventListener("chat-mirror", (e: MessageEvent) => {
+      try {
+        const data = JSON.parse(e.data) as ChatMirrorSSEPayload;
+        this.callbacks.onMirrorEvent?.(data);
+      } catch (err) {
+        console.warn("[chat-event-bridge] malformed chat-mirror SSE data:", err);
       }
     });
 

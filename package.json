@@ -12,7 +12,9 @@
     "format:fix": "oxfmt --write",
     "postinstall": "bash scripts/rebuild-native.sh",
     "verify-proxy": "node scripts/verify-proxy-domains.mjs",
-    "check:ext-externals": "node scripts/check-extension-externals.mjs"
+    "check:ext-externals": "node scripts/check-extension-externals.mjs",
+    "smoke-test:vendor": "node scripts/smoke-test-vendor.cjs",
+    "verify:bundle": "node scripts/verify-vendor-bundle.cjs"
   },
   "devDependencies": {
     "@types/node": "^22.15.0",

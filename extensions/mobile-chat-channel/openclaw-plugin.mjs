@@ -1,8 +1,58 @@
 import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { basename, extname } from "node:path";
+import { URL, fileURLToPath } from "node:url";
 
 import { MobileSyncEngine, RelayTransport, RELAY_MAX_CLIENT_BYTES, RELAY_MAX_CLIENT_MB } from "./dist/index.mjs";
+
+const HTTP_URL_RE = /^https?:\/\//i;
+
+/**
+ * Fetch a remote URL into a Buffer.  Returns null on failure so callers can
+ * fall back gracefully.
+ */
+async function fetchToBuffer(url) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`HTTP ${res.status} ${res.statusText}`);
+    return Buffer.from(await res.arrayBuffer());
+}
+
+/**
+ * Read media from a local path or remote URL.
+ * Returns { buf, fileName, ext } or throws on failure.
+ */
+async function readMediaSource(source) {
+    if (HTTP_URL_RE.test(source)) {
+        const buf = await fetchToBuffer(source);
+        // Derive a filename from the URL path; fall back to a timestamp-based name.
+        let fileName;
+        try {
+            const pathname = new URL(source).pathname;
+            fileName = basename(pathname);
+            if (!fileName || fileName === "/") fileName = null;
+        } catch { fileName = null; }
+        if (!fileName) fileName = `media-${Date.now()}`;
+        const ext = extname(fileName).toLowerCase();
+        return { buf, fileName, ext };
+    }
+    // Convert file:// URLs to local paths.
+    let localPath = source;
+    if (/^file:\/\//i.test(localPath)) {
+        localPath = fileURLToPath(localPath);
+    }
+    // Expand leading ~ to home directory (Node fs doesn't do this automatically).
+    // Handle both Unix ~/path and Windows ~\path.
+    if (localPath.startsWith("~/") || localPath.startsWith("~\\")) {
+        localPath = homedir() + localPath.slice(1);
+    } else if (localPath === "~") {
+        localPath = homedir();
+    }
+    const buf = await readFile(localPath);
+    const fileName = basename(localPath);
+    const ext = extname(localPath).toLowerCase();
+    return { buf, fileName, ext };
+}
 
 const MIME_BY_EXT = {
     ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
@@ -133,26 +183,38 @@ const plugin = {
                     textChunkLimit: 2048,
                     async sendText(ctx) {
                         const engine = resolveEngine(ctx.to);
-                        if (engine) {
-                            engine.queueOutbound(ctx.to, { type: 'text', text: ctx.text });
+                        if (!engine) {
+                            console.warn(`[MobileChat Plugin] sendText: no engine for to=${ctx.to} (engines=${syncEngines.size})`);
+                            return { channel: "mobile", messageId: randomUUID(), chatId: ctx.to ?? "mobile" };
                         }
+                        engine.queueOutbound(ctx.to, { type: 'text', text: ctx.text });
                         return { channel: "mobile", messageId: randomUUID(), chatId: ctx.to ?? "mobile" };
                     },
                     async sendMedia(ctx) {
                         const engine = resolveEngine(ctx.to);
                         if (!engine) {
+                            console.warn(`[MobileChat Plugin] sendMedia: no engine for to=${ctx.to} (engines=${syncEngines.size})`);
                             return { channel: "mobile", messageId: randomUUID(), chatId: ctx.to ?? "mobile" };
                         }
                         try {
-                            const filePath = ctx.mediaUrl;
-                            const buf = await readFile(filePath);
+                            const source = ctx.mediaUrl;
+                            const { buf, fileName, ext } = await readMediaSource(source);
+                            if (buf.length === 0) {
+                                engine.queueOutbound(ctx.to, {
+                                    type: 'file',
+                                    data: '',
+                                    mimeType: MIME_BY_EXT[ext] || "application/octet-stream",
+                                    text: ctx.text || '',
+                                    fileName,
+                                });
+                                return { channel: "mobile", messageId: randomUUID(), chatId: ctx.to ?? "mobile" };
+                            }
                             if (buf.length > RELAY_MAX_CLIENT_BYTES) {
                                 const sizeMB = (buf.length / (1024 * 1024)).toFixed(1);
                                 console.error(`[MobileChat Plugin] File too large (${sizeMB} MB), skipping send`);
                                 engine.queueOutbound(ctx.to, { type: 'text', text: `[File too large: ${sizeMB} MB, limit is ${RELAY_MAX_CLIENT_MB} MB]` });
                                 return { channel: "mobile", messageId: randomUUID(), chatId: ctx.to ?? "mobile" };
                             }
-                            const ext = extname(filePath).toLowerCase();
                             const mimeType = MIME_BY_EXT[ext] || "application/octet-stream";
                             const isImage = mimeType.startsWith("image/");
                             const b64 = buf.toString("base64");
@@ -161,10 +223,10 @@ const plugin = {
                                 data: b64,
                                 mimeType,
                                 text: ctx.text || "",
-                                fileName: basename(filePath),
+                                fileName,
                             });
                         } catch (err) {
-                            console.error("[MobileChat Plugin] Failed to read media file:", err);
+                            console.error("[MobileChat Plugin] Failed to read media file:", ctx.mediaUrl, err);
                             engine.queueOutbound(ctx.to, { type: 'text', text: ctx.text || '[File]' });
                         }
                         return { channel: "mobile", messageId: randomUUID(), chatId: ctx.to ?? "mobile" };

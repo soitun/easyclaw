@@ -551,8 +551,11 @@ export function writeGatewayConfig(options: WriteGatewayConfigOptions): string {
     };
   }
 
-  // Exec host — EasyClaw is a desktop app, agent runs locally.
-  // Allow exec on the gateway host (not sandboxed).
+  // Tools profile — EasyClaw is a desktop app with full agent capabilities.
+  // OpenClaw v2026.3.2 defaults new installs to "messaging" (no file/exec tools).
+  // EasyClaw needs "full" so file permissions, rules, and exec all work.
+  //
+  // Exec host — agent runs locally on the gateway host (not sandboxed).
   {
     const existingTools =
       typeof config.tools === "object" && config.tools !== null
@@ -564,6 +567,7 @@ export function writeGatewayConfig(options: WriteGatewayConfigOptions): string {
         : {};
     config.tools = {
       ...existingTools,
+      profile: "full",
       exec: { ...existingExec, host: "gateway", security: "full", ask: "off" },
     };
   }
