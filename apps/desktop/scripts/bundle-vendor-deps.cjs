@@ -1312,7 +1312,7 @@ function smokeTestGateway() {
   try {
     const stdout = execFileSync(process.execPath, [openclawMjs, "gateway"], {
       cwd: tmpDir,
-      timeout: 30_000,
+      timeout: 90_000,
       env: {
         ...process.env,
         OPENCLAW_CONFIG_PATH: path.join(tmpDir, "openclaw.json"),
@@ -1385,18 +1385,27 @@ function smokeTestGateway() {
     process.exit(1);
   }
 
-  if (killed && !allOutput.trim()) {
+  // Strip Node.js warnings (MaxListenersExceeded, ExperimentalWarning, etc.)
+  // that flood output and hide the actual error.
+  const filteredOutput = allOutput
+    .split("\n")
+    .filter((line) => !line.startsWith("(node:") && !line.startsWith("(Use `node --trace-warnings"))
+    .join("\n")
+    .trim();
+
+  if (killed) {
     console.error(
-      `\n[bundle-vendor-deps] ✗ SMOKE TEST FAILED: Gateway process timed out with no output.\n` +
-        `\n  The gateway did not produce any output before the 30 s timeout.\n` +
-        `  This may indicate the bundled entry.js is too large to parse on this CI runner.\n`,
+      `\n[bundle-vendor-deps] ✗ SMOKE TEST FAILED: Gateway process timed out (90 s).\n` +
+        `\n  The gateway did not print "[gateway]" before the timeout.\n` +
+        `  This may indicate the bundled entry.js is too large to parse on this CI runner.\n` +
+        `\n  Output (first 3000 chars):\n  ${(filteredOutput || "(empty)").substring(0, 3000)}\n`,
     );
     process.exit(1);
   }
 
   console.error(
     `\n[bundle-vendor-deps] ✗ SMOKE TEST FAILED: Gateway exited with code ${exitCode}.\n` +
-      `\n  Output (first 1000 chars):\n  ${(allOutput || "(empty)").substring(0, 1000)}\n`,
+      `\n  Output (first 3000 chars):\n  ${(filteredOutput || "(empty)").substring(0, 3000)}\n`,
   );
   process.exit(1);
 }

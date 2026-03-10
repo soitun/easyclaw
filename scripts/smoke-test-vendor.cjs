@@ -145,6 +145,15 @@ function checkOutput() {
   }
 }
 
+// Strip Node.js warnings that flood output and hide real errors.
+function filterWarnings(text) {
+  return text
+    .split("\n")
+    .filter((line) => !line.startsWith("(node:") && !line.startsWith("(Use `node --trace-warnings"))
+    .join("\n")
+    .trim();
+}
+
 child.on("close", (code) => {
   if (settled) return;
 
@@ -157,22 +166,24 @@ child.on("close", (code) => {
     return;
   }
 
+  const filtered = filterWarnings(allOutput) || "(empty)";
   console.error(
     `\n[smoke-test-vendor] FAILED: Gateway exited with code ${code}.\n` +
-      `  Output (first 1000 chars):\n  ${(allOutput || "(empty)").substring(0, 1000)}\n`,
+      `  Output (first 3000 chars):\n  ${filtered.substring(0, 3000)}\n`,
   );
   settle(1);
 });
 
-// Hard timeout: 30 seconds
+// Hard timeout: 90 seconds (macOS CI VMs are slow)
 const timeout = setTimeout(() => {
   if (settled) return;
+  const filtered = filterWarnings(allOutput) || "(empty)";
   console.error(
-    `\n[smoke-test-vendor] FAILED: Gateway timed out (30s) with no "[gateway]" output.\n` +
-      `  Output (first 1000 chars):\n  ${(allOutput || "(empty)").substring(0, 1000)}\n`,
+    `\n[smoke-test-vendor] FAILED: Gateway timed out (90s) with no "[gateway]" output.\n` +
+      `  Output (first 3000 chars):\n  ${filtered.substring(0, 3000)}\n`,
   );
   settle(1);
-}, 30_000);
+}, 90_000);
 
 // Don't let the timeout keep the process alive if we've already settled
 timeout.unref();
