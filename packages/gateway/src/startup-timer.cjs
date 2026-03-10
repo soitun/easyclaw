@@ -11,11 +11,61 @@
  */
 "use strict";
 
-// Windows: set console output code page to UTF-8 so child processes
-// (PowerShell, cmd) produce Unicode filenames instead of mojibake.
-// Without this, non-ASCII filenames from exec commands become "???".
+// ── Windows UTF-8 spawn hook ──
+// PowerShell 5.1 encodes pipe output via [Console]::OutputEncoding, which
+// defaults to the system OEM code page (e.g. GBK on Chinese Windows).
+// The gateway runs headless (no console), so `chcp 65001` has no effect —
+// there is no console to set the code page on.
+//
+// Fix: monkey-patch child_process.spawn to inject UTF-8 encoding setup
+// into every PowerShell and cmd.exe invocation. This ensures non-ASCII
+// filenames (Chinese, Japanese, Korean, etc.) survive the exec→pipe→Node
+// round-trip regardless of the system locale.
 if (process.platform === "win32") {
-  require("child_process").execSync("chcp 65001", { stdio: "ignore" });
+  const cp = require("child_process");
+  const origSpawn = cp.spawn;
+
+  cp.spawn = function utf8Spawn(command, args, options) {
+    // Normalize overloaded signature: spawn(cmd, opts) vs spawn(cmd, args, opts)
+    if (args != null && !Array.isArray(args)) {
+      options = args;
+      args = [];
+    }
+
+    const cmd = String(command).toLowerCase();
+
+    // PowerShell: inject [Console]::OutputEncoding = UTF8 before -Command body
+    if (cmd.includes("powershell") || cmd.includes("pwsh")) {
+      if (Array.isArray(args)) {
+        args = [...args];
+        for (let i = 0; i < args.length; i++) {
+          if (String(args[i]).toLowerCase() === "-command" && i + 1 < args.length) {
+            args[i + 1] =
+              "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; " +
+              args[i + 1];
+            break;
+          }
+        }
+      }
+      return origSpawn.call(this, command, args, options);
+    }
+
+    // cmd.exe (explicit or shell:true): prepend chcp 65001
+    if (cmd.includes("cmd")) {
+      if (Array.isArray(args)) {
+        args = [...args];
+        for (let i = 0; i < args.length; i++) {
+          if (String(args[i]).toLowerCase() === "/c" && i + 1 < args.length) {
+            args[i + 1] = "chcp 65001>nul & " + args[i + 1];
+            break;
+          }
+        }
+      }
+      return origSpawn.call(this, command, args, options);
+    }
+
+    return origSpawn.call(this, command, args, options);
+  };
 }
 
 const t0 = performance.now();
