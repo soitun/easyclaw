@@ -1,4 +1,5 @@
 import type { Storage } from "@easyclaw/storage";
+import { resolveGatewayProvider, type LLMProvider } from "@easyclaw/core";
 import type { KeyModelUsageRecord, KeyModelUsageSummary, KeyUsageDailyBucket, KeyUsageQueryParams } from "@easyclaw/core";
 
 /** Cumulative per-model usage totals (same shape used in snapshot engine). */
@@ -120,7 +121,7 @@ export class UsageQueryService {
       if (params.keyId && params.keyId !== key.id) continue;
       if (params.provider && params.provider !== key.provider) continue;
 
-      const mapKey = `${key.provider}/${key.model}`;
+      const mapKey = `${resolveGatewayProvider(key.provider as LLMProvider)}/${key.model}`;
       const current = currentUsage.get(mapKey);
       if (!current) continue;
 

@@ -1,4 +1,5 @@
 import type { Storage } from "@easyclaw/storage";
+import { resolveGatewayProvider, type LLMProvider } from "@easyclaw/core";
 
 /**
  * Cumulative per-model usage totals from OpenClaw JSONL.
@@ -49,7 +50,7 @@ export class UsageSnapshotEngine {
    */
   async recordDeactivation(keyId: string, provider: string, model: string): Promise<void> {
     const currentUsage = await this.captureUsage();
-    const modelKey = `${provider}/${model}`;
+    const modelKey = `${resolveGatewayProvider(provider as LLMProvider)}/${model}`;
     const current = currentUsage.get(modelKey) ?? ZERO_TOTALS;
     const now = Date.now();
 
@@ -99,7 +100,7 @@ export class UsageSnapshotEngine {
     }
 
     const currentUsage = await this.captureUsage();
-    const modelKey = `${provider}/${model}`;
+    const modelKey = `${resolveGatewayProvider(provider as LLMProvider)}/${model}`;
     const current = currentUsage.get(modelKey) ?? ZERO_TOTALS;
     const now = Date.now();
 
@@ -128,7 +129,7 @@ export class UsageSnapshotEngine {
     }
 
     const currentUsage = await this.captureUsage();
-    const modelKey = `${activeProvider}/${activeModel}`;
+    const modelKey = `${resolveGatewayProvider(activeProvider as LLMProvider)}/${activeModel}`;
     const current = currentUsage.get(modelKey) ?? ZERO_TOTALS;
     const now = Date.now();
 
