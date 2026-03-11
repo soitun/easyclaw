@@ -40,7 +40,23 @@ echo "==> Platform: $PLATFORM"
 # ---- Quick check: skip if both prebuilds already exist ----
 if [ "$FORCE" = false ]; then
   NODE_ABI=$(node -p "process.versions.modules")
-  ELECTRON_ABI=$(cd "$DESKTOP_DIR" && ELECTRON_RUN_AS_NODE=1 npx electron -e "process.stdout.write(process.versions.modules)")
+  ELECTRON_ABI=$(cd "$DESKTOP_DIR" && ELECTRON_RUN_AS_NODE=1 npx electron -e "process.stdout.write(process.versions.modules)" 2>/dev/null) || true
+
+  if [ -z "$ELECTRON_ABI" ]; then
+    # Electron ABI detection failed (can happen in pnpm postinstall on Windows).
+    # Check if ANY prebuild exists besides Node.js — if so, skip rebuild.
+    EXISTING_ABIS=$(ls -d "$SQLITE_DIR/lib/binding/node-v"*"-${PLATFORM}" 2>/dev/null | grep -v "node-v${NODE_ABI}" | head -1)
+    if [ -n "$EXISTING_ABIS" ] && [ -f "$EXISTING_ABIS/better_sqlite3.node" ] && [ ! -d "$SQLITE_DIR/build" ]; then
+      echo ""
+      echo "✅ Electron ABI detection failed but existing prebuilds found — skipping rebuild."
+      echo "   Node.js ABI $NODE_ABI: $(ls "$SQLITE_DIR/lib/binding/node-v${NODE_ABI}-${PLATFORM}/better_sqlite3.node" 2>/dev/null && echo 'OK' || echo 'MISSING')"
+      echo "   Other prebuild: $EXISTING_ABIS"
+      echo "   Use --force to rebuild anyway."
+      exit 0
+    fi
+    echo "⚠️ Electron ABI detection failed and no prebuilds found — proceeding with rebuild."
+  fi
+
   NODE_BIN="$SQLITE_DIR/lib/binding/node-v${NODE_ABI}-${PLATFORM}/better_sqlite3.node"
   ELECTRON_BIN="$SQLITE_DIR/lib/binding/node-v${ELECTRON_ABI}-${PLATFORM}/better_sqlite3.node"
 
