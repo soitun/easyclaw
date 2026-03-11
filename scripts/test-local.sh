@@ -306,6 +306,9 @@ fi
 # ---- Step 4: Build all packages ----
 if [ "$PIPELINE_FAILED" = false ]; then
   step "Build all workspace packages"
+  # Stop stale turbo daemon to avoid transient build failures (0s exit, no output).
+  # Turbo will automatically restart a fresh daemon on the next invocation.
+  (cd "$REPO_ROOT" && npx turbo daemon stop 2>/dev/null) || true
   step_start=$SECONDS
   if (cd "$REPO_ROOT" && pnpm run build); then
     record_step "build" 0 $((SECONDS - step_start))
