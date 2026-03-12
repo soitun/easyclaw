@@ -414,15 +414,15 @@ describe('MobileSyncEngine', () => {
     });
 
     describe('ACK timeout', () => {
-        it('should remove message from outbox after ACK timeout', async () => {
+        it('should retain message in outbox after ACK timeout', async () => {
             await engine.start();
             const id = engine.queueOutbound('mobile-123', { type: 'text', text: 'will-timeout' });
             expect((engine as any).outbox.has(id)).toBe(true);
 
-            // Advance past ACK_TIMEOUT_MS (5 minutes)
-            vi.advanceTimersByTime(5 * 60_000 + 100);
+            // Advance past ACK_TIMEOUT_MS
+            vi.advanceTimersByTime(30_000 + 100);
 
-            expect((engine as any).outbox.has(id)).toBe(false);
+            expect((engine as any).outbox.has(id)).toBe(true);
         });
 
         it('should not timeout if ACK received in time', async () => {
@@ -434,27 +434,38 @@ describe('MobileSyncEngine', () => {
             expect((engine as any).outbox.has(id)).toBe(false);
 
             // Advance past timeout — should not cause errors
-            vi.advanceTimersByTime(5 * 60_000 + 100);
+            vi.advanceTimersByTime(30_000 + 100);
             expect((engine as any).outbox.has(id)).toBe(false);
+        });
+
+        it('should retry an unacked message when timeout fires and peer is online', async () => {
+            await engine.start();
+            engine.mobileOnline = true;
+            const id = engine.queueOutbound('mobile-123', { type: 'text', text: 'retry-me' });
+
+            transport.send.mockClear();
+            vi.advanceTimersByTime(30_000 + 100);
+
+            expect((engine as any).outbox.has(id)).toBe(true);
+            expect(transport.send).toHaveBeenCalledWith(
+                'pairing-1',
+                expect.objectContaining({
+                    type: 'msg',
+                    id,
+                    sender: 'desktop',
+                    payload: { type: 'text', text: 'retry-me' },
+                }),
+            );
         });
     });
 
     describe('persistence', () => {
-        it('should save sync state to disk on queueOutbound (debounced)', async () => {
+        it('should start saving sync state to disk immediately on queueOutbound', async () => {
             await engine.start();
             (fs.writeFile as any).mockClear();
 
             engine.queueOutbound('mobile-123', { type: 'text', text: 'persisted' });
-
-            // Not yet saved (debounced)
-            expect(fs.writeFile).not.toHaveBeenCalledWith(
-                expect.stringContaining('pairing-1.json'),
-                expect.any(String),
-                'utf-8'
-            );
-
-            // Advance past debounce
-            vi.advanceTimersByTime(600);
+            await (engine as any).saveChain;
 
             expect(fs.writeFile).toHaveBeenCalledWith(
                 expect.stringContaining('pairing-1.json'),
@@ -463,13 +474,18 @@ describe('MobileSyncEngine', () => {
             );
 
             // Verify saved content
-            const savedJson = (fs.writeFile as any).mock.calls.find(
+            const savedCalls = (fs.writeFile as any).mock.calls.filter(
                 (c: any[]) => typeof c[0] === 'string' && c[0].includes('pairing-1.json')
-            )?.[1];
-            const saved = JSON.parse(savedJson);
-            expect(saved.outbox).toHaveLength(1);
-            expect(saved.outbox[0].payload.text).toBe('persisted');
-            expect(saved.sentHistory).toHaveLength(1);
+            );
+            const matchingSave = savedCalls
+                .map((c: any[]) => JSON.parse(c[1]))
+                .find((saved: any) =>
+                    Array.isArray(saved.outbox) &&
+                    saved.outbox.some((entry: any) => entry?.payload?.text === 'persisted') &&
+                    Array.isArray(saved.sentHistory) &&
+                    saved.sentHistory.some((entry: any) => entry?.payload?.text === 'persisted')
+                );
+            expect(matchingSave).toBeDefined();
         });
 
         it('should load sync state from disk on start', async () => {
@@ -494,6 +510,7 @@ describe('MobileSyncEngine', () => {
 
             engine.queueOutbound('mobile-123', { type: 'text', text: 'before-stop' });
             engine.stop();
+            await (engine as any).saveChain;
 
             // saveSyncState called synchronously on stop
             expect(fs.writeFile).toHaveBeenCalledWith(

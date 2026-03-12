@@ -58,7 +58,7 @@ const SYNC_STATE_DIR = join(homedir(), ".easyclaw", "openclaw", "mobile-sync");
 
 const SENT_HISTORY_LIMIT = 200;
 const OUTBOX_LIMIT = 500;
-const ACK_TIMEOUT_MS = 5 * 60_000; // 5 minutes
+const ACK_TIMEOUT_MS = 30_000; // Retry unacked messages every 30s until ACKed.
 const SAVE_DEBOUNCE_MS = 500;
 const PROCESSED_IDS_LIMIT = 1000;
 
@@ -94,6 +94,7 @@ export class MobileSyncEngine {
     private processedIdsOrder: string[] = [];
     private unsubTransport: (() => void) | null = null;
     private saveTimer: ReturnType<typeof setTimeout> | null = null;
+    private saveChain: Promise<void> = Promise.resolve();
     private lastFlushTime: number = 0;
     private syncStatePath: string;
 
@@ -150,25 +151,36 @@ export class MobileSyncEngine {
         }
     }
 
-    /** Persist outbox and sentHistory to disk (debounced). */
-    private scheduleSave() {
+    /** Persist outbox and sentHistory to disk. Debounced by default, immediate for critical writes. */
+    private scheduleSave(immediate = false) {
+        if (immediate) {
+            if (this.saveTimer) {
+                clearTimeout(this.saveTimer);
+                this.saveTimer = null;
+            }
+            void this.saveSyncState();
+            return;
+        }
         if (this.saveTimer) return;
         this.saveTimer = setTimeout(() => {
             this.saveTimer = null;
-            this.saveSyncState();
+            void this.saveSyncState();
         }, SAVE_DEBOUNCE_MS);
     }
 
     private async saveSyncState() {
-        try {
-            const state = {
-                outbox: Array.from(this.outbox.values()),
-                sentHistory: this.sentHistory,
-            };
-            await fs.writeFile(this.syncStatePath, JSON.stringify(state), 'utf-8');
-        } catch (err: any) {
-            console.error(`[MobileSync:${this.pairingId.slice(0, 8)}] Failed to save sync state:`, err.message);
-        }
+        this.saveChain = this.saveChain.catch(() => undefined).then(async () => {
+            try {
+                const state = {
+                    outbox: Array.from(this.outbox.values()),
+                    sentHistory: this.sentHistory,
+                };
+                await fs.writeFile(this.syncStatePath, JSON.stringify(state), 'utf-8');
+            } catch (err: any) {
+                console.error(`[MobileSync:${this.pairingId.slice(0, 8)}] Failed to save sync state:`, err.message);
+            }
+        });
+        await this.saveChain;
     }
 
     private startAckTimer(id: string) {
@@ -176,9 +188,17 @@ export class MobileSyncEngine {
         if (existing) clearTimeout(existing);
         this.ackTimers.set(id, setTimeout(() => {
             this.ackTimers.delete(id);
-            if (this.outbox.delete(id)) {
-                this.scheduleSave();
+            const pending = this.outbox.get(id);
+            if (!pending) {
+                return;
             }
+            // Relay does not persist messages, so never drop an unacked outbound
+            // message just because the peer was offline. Keep retrying until ACKed
+            // or explicitly evicted by the bounded outbox policy.
+            if (this.mobileOnline && this.transport.isConnected()) {
+                this.transport.send(this.pairingId, pending);
+            }
+            this.startAckTimer(id);
         }, ACK_TIMEOUT_MS));
     }
 
@@ -417,7 +437,7 @@ export class MobileSyncEngine {
             this.sentHistory.splice(0, this.sentHistory.length - SENT_HISTORY_LIMIT);
         }
 
-        this.scheduleSave();
+        this.scheduleSave(true);
 
         // Send immediately if possible (transport.send adds pairingId)
         this.transport.send(this.pairingId, msg);
@@ -430,7 +450,7 @@ export class MobileSyncEngine {
                 if (msg.id) {
                     this.outbox.delete(msg.id);
                     this.clearAckTimer(msg.id);
-                    this.scheduleSave();
+                    this.scheduleSave(true);
                 }
                 break;
 
