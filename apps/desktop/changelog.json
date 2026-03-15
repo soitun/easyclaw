@@ -1,5 +1,21 @@
 [
   {
+    "version": "1.6.8",
+    "date": "2026-03-14",
+    "en": [
+      "Harden Windows vendor dependency packaging and startup path",
+      "Adjust desktop window size and refine skills marketplace layout",
+      "Strengthen mobile chat delivery retries",
+      "Fix cold-start gate timing for Windows CI builds"
+    ],
+    "zh": [
+      "加固 Windows 依赖打包和启动流程",
+      "调整桌面窗口尺寸，优化技能市场界面布局",
+      "增强移动聊天消息发送重试机制",
+      "修复 Windows CI 构建冷启动超时问题"
+    ]
+  },
+  {
     "version": "1.6.7",
     "date": "2026-03-11",
     "en": [
