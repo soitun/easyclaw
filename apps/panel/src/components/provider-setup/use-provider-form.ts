@@ -1,23 +1,25 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { useQuery } from "@apollo/client/react";
 import { getDefaultModelForProvider, getProviderMeta } from "@easyclaw/core";
-import type { LLMProvider } from "@easyclaw/core";
+import type { LLMProvider, GQL } from "@easyclaw/core";
 import {
   fetchProviderKeys,
   updateSettings,
   createProviderKey,
   validateApiKey,
   validateCustomApiKey,
-  fetchPricing,
   startOAuthFlow,
   saveOAuthFlow,
   completeManualOAuth,
+  pollOAuthStatus,
   detectLocalModels,
   fetchLocalModels,
   checkLocalModelHealth,
   trackEvent,
 } from "../../api/index.js";
-import type { ProviderPricing, LocalModelServer } from "../../api/index.js";
+import type { LocalModelServer } from "../../api/index.js";
+import { PRICING_QUERY } from "../../api/pricing-queries.js";
 
 export function useProviderForm(onSave: (provider: string) => void) {
   const { t, i18n } = useTranslation();
@@ -53,8 +55,11 @@ export function useProviderForm(onSave: (provider: string) => void) {
   const [oauthAuthUrl, setOauthAuthUrl] = useState("");
   const [oauthCallbackUrl, setOauthCallbackUrl] = useState("");
   const [oauthManualLoading, setOauthManualLoading] = useState(false);
-  const [pricingList, setPricingList] = useState<ProviderPricing[] | null>(null);
+  const [oauthFlowId, setOauthFlowId] = useState("");
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [pricingList, setPricingList] = useState<GQL.ProviderPricing[] | null>(null);
   const [pricingLoading, setPricingLoading] = useState(true);
+  const [deviceId, setDeviceId] = useState<string | null>(null);
   const [existingKeyCount, setExistingKeyCount] = useState<number | null>(null);
   const leftCardRef = useRef<HTMLDivElement>(null);
   const [leftHeight, setLeftHeight] = useState<number | undefined>(undefined);
@@ -68,26 +73,47 @@ export function useProviderForm(onSave: (provider: string) => void) {
     return () => ro.disconnect();
   }, []);
 
-  // Fetch pricing data and existing key count on mount
+  const stopPolling = useCallback(() => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+  }, []);
+
+  // Cleanup polling on unmount
   useEffect(() => {
-    (async () => {
-      try {
-        const statusRes = await fetch("/api/status");
-        const status = await statusRes.json();
-        const deviceId = status.deviceId || "unknown";
-        const lang = navigator.language?.slice(0, 2) || "en";
-        const platform = navigator.userAgent.includes("Mac") ? "darwin"
-          : navigator.userAgent.includes("Win") ? "win32" : "linux";
-        const data = await fetchPricing(deviceId, platform, "0.8.0", lang);
-        setPricingList(data);
-      } catch {
-        setPricingList(null);
-      } finally {
-        setPricingLoading(false);
-      }
-    })();
+    return () => stopPolling();
+  }, [stopPolling]);
+
+  // Fetch deviceId on mount (needed for pricing query variables)
+  useEffect(() => {
+    fetch("/api/status")
+      .then((res) => res.json())
+      .then((status) => setDeviceId(status.deviceId || "unknown"))
+      .catch(() => setDeviceId("unknown"));
     fetchProviderKeys().then((keys) => setExistingKeyCount(keys.length)).catch(() => {});
   }, []);
+
+  const pricingLang = navigator.language?.slice(0, 2) || "en";
+  const pricingPlatform = navigator.userAgent.includes("Mac") ? "darwin"
+    : navigator.userAgent.includes("Win") ? "win32" : "linux";
+
+  // Fetch pricing via Apollo (skipped until deviceId is known)
+  const { data: pricingData, loading: pricingQueryLoading } = useQuery<{ pricing: GQL.ProviderPricing[] }>(PRICING_QUERY, {
+    variables: { deviceId: deviceId ?? "", platform: pricingPlatform, appVersion: "0.8.0", language: pricingLang },
+    skip: !deviceId,
+    fetchPolicy: "cache-first",
+  });
+
+  useEffect(() => {
+    if (pricingData?.pricing) {
+      setPricingList(pricingData.pricing);
+      setPricingLoading(false);
+    } else if (deviceId && !pricingQueryLoading) {
+      setPricingList(null);
+      setPricingLoading(false);
+    }
+  }, [pricingData, pricingQueryLoading, deviceId]);
 
   // Auto-detect local servers when switching to local tab
   useEffect(() => {
@@ -254,15 +280,35 @@ export function useProviderForm(onSave: (provider: string) => void) {
   async function handleOAuth() {
     setOauthLoading(true);
     setError(null);
+    stopPolling();
     try {
       const result = await startOAuthFlow(provider);
-      if (result.manualMode) {
-        setOauthManualMode(true);
-        setOauthAuthUrl(result.authUrl || "");
-      } else {
-        setOauthTokenPreview(result.tokenPreview || "oauth-token-••••••••");
-        setLabel(result.email || getProviderMeta(provider as LLMProvider)?.label || "OAuth");
-        setModel(getDefaultModelForProvider(provider as LLMProvider)?.modelId ?? "");
+      // Always enter manual/hybrid mode — show auth URL + callback input immediately
+      setOauthManualMode(true);
+      setOauthAuthUrl(result.authUrl || "");
+      if (result.flowId) {
+        setOauthFlowId(result.flowId);
+        // Start polling for auto-callback completion
+        pollRef.current = setInterval(async () => {
+          try {
+            const status = await pollOAuthStatus(result.flowId!);
+            if (status.status === "completed") {
+              stopPolling();
+              setOauthTokenPreview(status.tokenPreview || "oauth-token-••••••••");
+              setLabel(status.email || getProviderMeta(provider as LLMProvider)?.label || "OAuth");
+              setModel(getDefaultModelForProvider(provider as LLMProvider)?.modelId ?? "");
+              setOauthManualMode(false);
+              setOauthAuthUrl("");
+              setOauthCallbackUrl("");
+              setOauthFlowId("");
+            } else if (status.status === "failed") {
+              stopPolling();
+              // Don't show error — manual paste still works
+            }
+          } catch {
+            // Network error during poll — ignore, keep polling
+          }
+        }, 2000);
       }
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
@@ -274,6 +320,7 @@ export function useProviderForm(onSave: (provider: string) => void) {
 
   async function handleManualOAuthComplete() {
     if (!oauthCallbackUrl.trim()) return;
+    stopPolling();
     setOauthManualLoading(true);
     setError(null);
     try {
@@ -284,6 +331,7 @@ export function useProviderForm(onSave: (provider: string) => void) {
       setOauthManualMode(false);
       setOauthAuthUrl("");
       setOauthCallbackUrl("");
+      setOauthFlowId("");
     } catch (err) {
       const e = err instanceof Error ? err : new Error(String(err));
       setError({ key: "providers.oauthFailed", detail: e.message, hover: (e as Error & { detail?: string }).detail });

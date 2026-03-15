@@ -439,7 +439,7 @@ export function parseCallbackInput(
   }
 }
 
-async function waitForLocalCallback(params: {
+export async function waitForLocalCallback(params: {
   expectedState: string;
   timeoutMs: number;
   onProgress?: (message: string) => void;

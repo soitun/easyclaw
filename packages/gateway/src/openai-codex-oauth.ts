@@ -34,6 +34,9 @@ function maskToken(token: string): string {
 type LoginFn = (options: {
   onAuth: (info: { url: string; instructions: string }) => void;
   onProgress?: (msg: string) => void;
+  onPrompt?: (opts: { message: string }) => Promise<string>;
+  onManualCodeInput?: () => Promise<string>;
+  originator?: string;
 }) => Promise<OpenAICodexOAuthCredentials>;
 
 /**
@@ -100,6 +103,89 @@ export async function acquireCodexOAuthToken(
     credentials: creds,
     email: undefined, // Codex OAuth doesn't return email
     tokenPreview: maskToken(creds.access ?? ""),
+  };
+}
+
+export interface HybridCodexOAuthFlow {
+  /** Auth URL for the user to open in any browser. */
+  authUrl: string;
+  /** Resolve the manual input promise with the callback URL the user pasted. */
+  resolveManualInput: (callbackUrl: string) => void;
+  /** Reject the manual input promise (e.g. flow cancelled). */
+  rejectManualInput: (err: Error) => void;
+  /** Resolves with acquired credentials when either auto or manual flow completes. */
+  completionPromise: Promise<AcquiredCodexOAuthCredentials>;
+}
+
+export async function startHybridCodexOAuthFlow(
+  callbacks: OAuthFlowCallbacks,
+  vendorDir?: string,
+): Promise<HybridCodexOAuthFlow> {
+  log.info("Starting hybrid OpenAI Codex OAuth flow");
+
+  const loginOpenAICodex = await loadLoginOpenAICodex(vendorDir);
+
+  // Deferred for the auth URL (resolved by onAuth callback)
+  let resolveAuthUrl: (url: string) => void;
+  let rejectAuthUrl: (err: Error) => void;
+  const authUrlPromise = new Promise<string>((resolve, reject) => {
+    resolveAuthUrl = resolve;
+    rejectAuthUrl = reject;
+  });
+
+  // Deferred for manual code input (resolved externally when user pastes callback URL)
+  let resolveManualInput: (url: string) => void;
+  let rejectManualInput: (err: Error) => void;
+  const manualInputPromise = new Promise<string>((resolve, reject) => {
+    resolveManualInput = resolve;
+    rejectManualInput = reject;
+  });
+
+  // Start the vendor OAuth flow in the background
+  const completionPromise = loginOpenAICodex({
+    onAuth: (info) => {
+      log.info("Codex hybrid OAuth: auth URL received");
+      callbacks.openUrl(info.url);
+      callbacks.onStatusUpdate?.(info.instructions || "Complete sign-in in browser…");
+      resolveAuthUrl!(info.url);
+    },
+    onProgress: (msg) => {
+      log.info(`OAuth: ${msg}`);
+      callbacks.onStatusUpdate?.(msg);
+    },
+    onPrompt: async () => {
+      // Fallback prompt — should not be reached in hybrid mode since onManualCodeInput is provided
+      log.warn("Codex OAuth: onPrompt called unexpectedly in hybrid mode");
+      return manualInputPromise;
+    },
+    onManualCodeInput: () => manualInputPromise,
+  }).then((creds) => {
+    log.info(`Codex hybrid OAuth complete, accountId=${creds.accountId}`);
+    return {
+      credentials: creds,
+      email: undefined,
+      tokenPreview: maskToken(creds.access ?? ""),
+    } as AcquiredCodexOAuthCredentials;
+  });
+
+  // If the vendor flow fails before calling onAuth, reject the auth URL promise
+  completionPromise.catch((err) => {
+    rejectAuthUrl!(err instanceof Error ? err : new Error(String(err)));
+  });
+
+  // Wait for the auth URL to be available before returning
+  let authUrl: string;
+  try {
+    authUrl = await authUrlPromise;
+  } catch (err) {
+    throw err instanceof Error ? err : new Error(`Failed to start Codex OAuth: ${err}`);
+  }
+
+  return {
+    authUrl,
+    resolveManualInput: resolveManualInput!,
+    rejectManualInput: rejectManualInput!,
+    completionPromise,
   };
 }
 

@@ -68,9 +68,12 @@ export function OAuthProviderForm({
 
       {oauthManualMode ? (
         <div className="mb-sm">
-          <div className="info-box info-box-yellow">
+          <div className="info-box info-box-blue">
             {t(`providers.oauthManualInfo_${provider}`)}
           </div>
+          <p className="form-help oauth-waiting">
+            {t("providers.oauthWaitingForBrowser")}
+          </p>
           <div className="mb-sm">
             <div className="form-label text-secondary">
               {t("providers.oauthManualUrlLabel")}

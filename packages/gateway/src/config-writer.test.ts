@@ -1143,7 +1143,7 @@ describe("config-writer", () => {
       const result = OpenClawSchema.safeParse(config);
       if (!result.success) {
         const messages = result.error.issues.map(
-          (i: { path: Array<string | number>; message: string }) => `  ${i.path.join(".")}: ${i.message}`,
+          (i) => `  ${(i as any).path.join(".")}: ${(i as any).message}`,
         );
         expect.fail(
           `Default config fails OpenClaw schema validation:\n${messages.join("\n")}\n` +
@@ -1172,8 +1172,8 @@ describe("config-writer", () => {
       const result = OpenClawSchema.safeParse(config);
       if (!result.success) {
         const messages = result.error.issues
-          .filter((i: { code: string }) => i.code !== "unrecognized_keys")
-          .map((i: { path: Array<string | number>; message: string }) => `  ${i.path.join(".")}: ${i.message}`);
+          .filter((i) => (i as any).code !== "unrecognized_keys")
+          .map((i) => `  ${(i as any).path.join(".")}: ${(i as any).message}`);
         if (messages.length > 0) {
           expect.fail(
             `writeGatewayConfig output fails OpenClaw schema validation:\n${messages.join("\n")}\n` +

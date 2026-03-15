@@ -5,6 +5,9 @@ import type { GatewayRpcClient } from "@easyclaw/gateway";
 import type { UsageSnapshotEngine } from "../usage-snapshot-engine.js";
 import type { UsageQueryService } from "../usage-query-service.js";
 import type { MobileManager } from "../mobile-manager.js";
+import type { AuthSessionManager } from "../auth-session.js";
+import type { SessionLifecycleManager } from "../browser-profiles/session-lifecycle-manager.js";
+import type { ManagedBrowserService } from "../browser-profiles/managed-browser-service.js";
 
 export interface ApiContext {
   storage: Storage;
@@ -19,16 +22,20 @@ export interface ApiContext {
     getProvider(): string | null;
   };
   onSttChange?: () => void;
+  onExtrasChange?: () => void;
   onPermissionsChange?: () => void;
   onBrowserChange?: () => void;
   onAutoLaunchChange?: (enabled: boolean) => void;
   onChannelConfigured?: (channelId: string) => void;
   onOAuthFlow?: (provider: string) => Promise<{ providerKeyId: string; email?: string; provider: string }>;
-  onOAuthAcquire?: (provider: string) => Promise<{ email?: string; tokenPreview: string; manualMode?: boolean; authUrl?: string }>;
+  onOAuthAcquire?: (provider: string) => Promise<{ email?: string; tokenPreview: string; manualMode?: boolean; authUrl?: string; flowId?: string }>;
   onOAuthSave?: (provider: string, options: { proxyUrl?: string; label?: string; model?: string }) => Promise<{ providerKeyId: string; email?: string; provider: string }>;
   onOAuthManualComplete?: (provider: string, callbackUrl: string) => Promise<{ email?: string; tokenPreview: string }>;
+  onOAuthPoll?: (flowId: string) => { status: "pending" | "completed" | "failed"; tokenPreview?: string; email?: string; error?: string };
   onTelemetryTrack?: (eventType: string, metadata?: Record<string, unknown>) => void;
-  vendorDir?: string;
+  vendorDir: string;
+  /** Node.js binary path — Electron's process.execPath with ELECTRON_RUN_AS_NODE=1 */
+  nodeBin: string;
   deviceId?: string;
   getUpdateResult?: () => {
     updateAvailable: boolean;
@@ -41,6 +48,9 @@ export interface ApiContext {
   snapshotEngine?: UsageSnapshotEngine;
   queryService?: UsageQueryService;
   mobileManager?: MobileManager;
+  authSession?: AuthSessionManager;
+  sessionLifecycleManager?: SessionLifecycleManager;
+  managedBrowserService?: ManagedBrowserService;
 }
 
 export type RouteHandler = (

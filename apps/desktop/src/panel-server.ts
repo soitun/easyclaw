@@ -14,6 +14,9 @@ import { UsageSnapshotEngine } from "./usage-snapshot-engine.js";
 import type { ModelUsageTotals } from "./usage-snapshot-engine.js";
 import { UsageQueryService } from "./usage-query-service.js";
 import { MobileManager } from "./mobile-manager.js";
+import type { AuthSessionManager } from "./auth-session.js";
+import type { SessionLifecycleManager } from "./browser-profiles/session-lifecycle-manager.js";
+import type { ManagedBrowserService } from "./browser-profiles/managed-browser-service.js";
 import { initCSBridge, restoreCS } from "./customer-service-bridge.js";
 import { sendChannelMessage } from "./channel-senders.js";
 import type { ApiContext, RouteHandler } from "./api-routes/api-context.js";
@@ -27,6 +30,11 @@ import { handleUsageRoutes } from "./api-routes/usage-routes.js";
 import { handleSkillsRoutes } from "./api-routes/skills-routes.js";
 import { handleChatSessionRoutes } from "./api-routes/chat-session-routes.js";
 import { handleMobileChatRoutes } from "./api-routes/mobile-chat-routes.js";
+import { handleBrowserProfilesRoutes } from "./api-routes/browser-profiles-routes.js";
+import { handleAuthRoutes } from "./api-routes/auth-routes.js";
+import { handleCloudGraphqlRoutes } from "./api-routes/cloud-graphql-routes.js";
+import { handleDoctorRoutes } from "./api-routes/doctor-routes.js";
+import { handleToolRegistryRoutes } from "./api-routes/tool-registry-routes.js";
 
 const log = createLogger("panel-server");
 
@@ -188,16 +196,20 @@ export interface PanelServerOptions {
     initialize(): Promise<void>;
   };
   onSttChange?: () => void;
+  onExtrasChange?: () => void;
   onPermissionsChange?: () => void;
   onBrowserChange?: () => void;
   onAutoLaunchChange?: (enabled: boolean) => void;
   onChannelConfigured?: (channelId: string) => void;
   onOAuthFlow?: (provider: string) => Promise<{ providerKeyId: string; email?: string; provider: string }>;
-  onOAuthAcquire?: (provider: string) => Promise<{ email?: string; tokenPreview: string; manualMode?: boolean; authUrl?: string }>;
+  onOAuthAcquire?: (provider: string) => Promise<{ email?: string; tokenPreview: string; manualMode?: boolean; authUrl?: string; flowId?: string }>;
   onOAuthSave?: (provider: string, options: { proxyUrl?: string; label?: string; model?: string }) => Promise<{ providerKeyId: string; email?: string; provider: string }>;
   onOAuthManualComplete?: (provider: string, callbackUrl: string) => Promise<{ email?: string; tokenPreview: string }>;
+  onOAuthPoll?: (flowId: string) => { status: "pending" | "completed" | "failed"; tokenPreview?: string; email?: string; error?: string };
   onTelemetryTrack?: (eventType: string, metadata?: Record<string, unknown>) => void;
-  vendorDir?: string;
+  vendorDir: string;
+  /** Node.js binary path for spawning OpenClaw CLI commands (e.g. doctor). */
+  nodeBin: string;
   deviceId?: string;
   getUpdateResult?: () => {
     updateAvailable: boolean;
@@ -213,11 +225,16 @@ export interface PanelServerOptions {
   onUpdateCancel?: () => void;
   onUpdateInstall?: () => Promise<void>;
   getUpdateDownloadState?: () => { status: string;[key: string]: unknown };
+  authSession?: AuthSessionManager;
+  sessionLifecycleManager?: SessionLifecycleManager;
+  managedBrowserService?: ManagedBrowserService;
 }
 
 // --- Route handlers (dispatched in order, first match wins) ---
 
 const routeHandlers: RouteHandler[] = [
+  handleAuthRoutes,
+  handleCloudGraphqlRoutes,
   handleRulesRoutes,
   handleSettingsRoutes,
   handleProviderRoutes,
@@ -226,6 +243,9 @@ const routeHandlers: RouteHandler[] = [
   handleSkillsRoutes,
   handleChatSessionRoutes,
   handleMobileChatRoutes,
+  handleBrowserProfilesRoutes,
+  handleToolRegistryRoutes,
+  handleDoctorRoutes,
 ];
 
 /**
@@ -235,7 +255,7 @@ const routeHandlers: RouteHandler[] = [
 export function startPanelServer(options: PanelServerOptions): Server {
   const port = options.port ?? resolvePanelPort();
   const distDir = resolve(options.panelDistDir);
-  const { storage, secretStore, getRpcClient, onRuleChange, onProviderChange, onOpenFileDialog, sttManager, onSttChange, onPermissionsChange, onBrowserChange, onAutoLaunchChange, onChannelConfigured, onOAuthFlow, onOAuthAcquire, onOAuthSave, onOAuthManualComplete, onTelemetryTrack, vendorDir, deviceId, getUpdateResult, getGatewayInfo, changelogPath, onUpdateDownload, onUpdateCancel, onUpdateInstall, getUpdateDownloadState } = options;
+  const { storage, secretStore, getRpcClient, onRuleChange, onProviderChange, onOpenFileDialog, sttManager, onSttChange, onExtrasChange, onPermissionsChange, onBrowserChange, onAutoLaunchChange, onChannelConfigured, onOAuthFlow, onOAuthAcquire, onOAuthSave, onOAuthManualComplete, onOAuthPoll, onTelemetryTrack, vendorDir, nodeBin, deviceId, getUpdateResult, getGatewayInfo, changelogPath, onUpdateDownload, onUpdateCancel, onUpdateInstall, getUpdateDownloadState, authSession, sessionLifecycleManager, managedBrowserService } = options;
 
   // Initialize the customer service bridge
   initCSBridge({ storage, secretStore, getGatewayInfo, deviceId });
@@ -309,10 +329,11 @@ export function startPanelServer(options: PanelServerOptions): Server {
   // Build the ApiContext object passed to all route handlers
   const ctx: ApiContext = {
     storage, secretStore, getRpcClient, onRuleChange, onProviderChange, onOpenFileDialog,
-    sttManager, onSttChange, onPermissionsChange, onBrowserChange, onAutoLaunchChange,
-    onChannelConfigured, onOAuthFlow, onOAuthAcquire, onOAuthSave, onOAuthManualComplete,
-    onTelemetryTrack, vendorDir, deviceId, getUpdateResult, getGatewayInfo,
-    snapshotEngine, queryService, mobileManager,
+    sttManager, onSttChange, onExtrasChange, onPermissionsChange, onBrowserChange, onAutoLaunchChange,
+    onChannelConfigured, onOAuthFlow, onOAuthAcquire, onOAuthSave, onOAuthManualComplete, onOAuthPoll,
+    onTelemetryTrack, vendorDir, nodeBin, deviceId, getUpdateResult, getGatewayInfo,
+    snapshotEngine, queryService, mobileManager, authSession, sessionLifecycleManager,
+    managedBrowserService,
   };
 
   const server = createServer(async (req, res) => {

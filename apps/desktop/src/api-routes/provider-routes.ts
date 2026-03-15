@@ -10,7 +10,7 @@ import { sendJson, parseBody } from "./route-utils.js";
 const log = createLogger("panel-server");
 
 export const handleProviderRoutes: RouteHandler = async (req, res, url, pathname, ctx) => {
-  const { storage, secretStore, onProviderChange, onOAuthFlow, onOAuthAcquire, onOAuthSave, onOAuthManualComplete, onTelemetryTrack, vendorDir, snapshotEngine } = ctx;
+  const { storage, secretStore, onProviderChange, onOAuthFlow, onOAuthAcquire, onOAuthSave, onOAuthManualComplete, onOAuthPoll, onTelemetryTrack, vendorDir, snapshotEngine } = ctx;
 
   // --- Provider Keys ---
   if (pathname === "/api/provider-keys" && req.method === "GET") {
@@ -393,6 +393,22 @@ export const handleProviderRoutes: RouteHandler = async (req, res, url, pathname
       const detail = err instanceof Error ? (err as Error & { detail?: string }).detail : undefined;
       sendJson(res, 500, { error: formatError(err), detail });
     }
+    return true;
+  }
+
+  // ── OAuth status polling ──
+  if (pathname === "/api/oauth/status" && req.method === "GET") {
+    const flowId = url.searchParams.get("flowId");
+    if (!flowId) {
+      sendJson(res, 400, { ok: false, error: "Missing flowId parameter" });
+      return true;
+    }
+    if (!onOAuthPoll) {
+      sendJson(res, 501, { ok: false, error: "OAuth polling not supported" });
+      return true;
+    }
+    const status = onOAuthPoll(flowId);
+    sendJson(res, 200, { ok: true, ...status });
     return true;
   }
 

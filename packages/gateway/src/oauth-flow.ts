@@ -9,6 +9,7 @@ import {
   buildAuthUrl,
   parseCallbackInput,
   exchangeCodeForTokens,
+  waitForLocalCallback,
 } from "./gemini-cli-oauth.js";
 import type { GeminiCliOAuthCredentials } from "./gemini-cli-oauth.js";
 
@@ -242,6 +243,90 @@ export async function startManualOAuthFlow(
   const authUrl = buildAuthUrl(challenge, verifier);
   log.info("Manual OAuth flow started, authUrl generated");
   return { authUrl, verifier };
+}
+
+export interface HybridGeminiOAuthFlow {
+  /** Auth URL for the user to open in any browser. */
+  authUrl: string;
+  /** PKCE verifier for manual callback URL completion. */
+  verifier: string;
+  /** Resolves with acquired credentials when auto callback completes. Rejects on timeout/error. */
+  completionPromise: Promise<AcquiredOAuthCredentials>;
+  /** Cancel the background callback server. */
+  cancel: () => void;
+}
+
+export async function startHybridGeminiOAuthFlow(
+  callbacks: Pick<OAuthFlowCallbacks, "onStatusUpdate" | "proxyUrl">,
+): Promise<HybridGeminiOAuthFlow> {
+  // Auto-install Gemini CLI if not available
+  if (!isGeminiCliAvailable()) {
+    log.info("Gemini CLI not found, attempting auto-install to ~/.easyclaw/gemini-cli/");
+    callbacks.onStatusUpdate?.("Installing Gemini CLI...");
+    const installed = await installGeminiCliLocal((msg) => {
+      log.info(msg);
+      callbacks.onStatusUpdate?.(msg);
+    }, callbacks.proxyUrl);
+    if (!installed || !isGeminiCliAvailable()) {
+      throw new Error(
+        "Failed to install Gemini CLI. Please install manually: npm install -g @google/gemini-cli",
+      );
+    }
+  }
+
+  const { verifier, challenge } = generatePkce();
+  const authUrl = buildAuthUrl(challenge, verifier);
+  log.info("Hybrid Gemini OAuth flow started, authUrl generated");
+
+  let cancelFn = () => {};
+
+  // Start the local callback server in the background (best-effort)
+  let settled = false;
+
+  const completionPromise = new Promise<AcquiredOAuthCredentials>((resolve, reject) => {
+    cancelFn = () => {
+      if (settled) return;
+      settled = true;
+      reject(new Error("Flow cancelled"));
+    };
+
+    waitForLocalCallback({
+      expectedState: verifier,
+      timeoutMs: 300_000, // 5 minutes
+      onProgress: (msg) => callbacks.onStatusUpdate?.(msg),
+    })
+      .then(async ({ code }) => {
+        if (settled) return;
+        log.info("Gemini hybrid OAuth: auto-callback received, exchanging code");
+        const creds = await exchangeCodeForTokens(code, verifier, callbacks.proxyUrl);
+        settled = true;
+        resolve({
+          credentials: creds,
+          email: creds.email,
+          tokenPreview: maskToken(creds.access ?? ""),
+        });
+      })
+      .catch((err) => {
+        if (settled) return;
+        // EADDRINUSE or timeout — not fatal, manual paste still works
+        const msg = err instanceof Error ? err.message : String(err);
+        if (msg.includes("EADDRINUSE") || msg.includes("EACCES")) {
+          log.warn(`Gemini callback server failed (${msg}), manual paste still available`);
+          // Don't reject — leave promise pending so manual path can work
+        } else {
+          settled = true;
+          log.error("Gemini hybrid OAuth auto-callback failed:", msg);
+          reject(err);
+        }
+      });
+  });
+
+  return {
+    authUrl,
+    verifier,
+    completionPromise,
+    cancel: cancelFn,
+  };
 }
 
 /**

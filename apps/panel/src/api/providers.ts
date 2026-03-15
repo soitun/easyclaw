@@ -98,8 +98,8 @@ export async function checkLocalModelHealth(baseUrl: string): Promise<{ ok: bool
 
 export async function startOAuthFlow(
   provider: string,
-): Promise<{ email?: string; tokenPreview?: string; providerKeyId?: string; provider?: string; manualMode?: boolean; authUrl?: string }> {
-  const result = await fetchJson<{ ok: boolean; email?: string; tokenPreview?: string; providerKeyId?: string; provider?: string; manualMode?: boolean; authUrl?: string }>(
+): Promise<{ email?: string; tokenPreview?: string; providerKeyId?: string; provider?: string; manualMode?: boolean; authUrl?: string; flowId?: string }> {
+  const result = await fetchJson<{ ok: boolean; email?: string; tokenPreview?: string; providerKeyId?: string; provider?: string; manualMode?: boolean; authUrl?: string; flowId?: string }>(
     "/oauth/start",
     { method: "POST", body: JSON.stringify({ provider }) },
   );
@@ -113,6 +113,14 @@ export async function completeManualOAuth(
   return fetchJson("/oauth/manual-complete", {
     method: "POST",
     body: JSON.stringify({ provider, callbackUrl }),
+  });
+}
+
+export async function pollOAuthStatus(
+  flowId: string,
+): Promise<{ status: "pending" | "completed" | "failed"; tokenPreview?: string; email?: string; error?: string }> {
+  return fetchJson(`/oauth/status?flowId=${encodeURIComponent(flowId)}`, {
+    method: "GET",
   });
 }
 

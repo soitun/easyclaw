@@ -21,11 +21,13 @@ import {
   acquireCodexOAuthToken,
   saveCodexOAuthCredentials,
   validateCodexAccessToken,
+  startHybridCodexOAuthFlow,
+  startHybridGeminiOAuthFlow,
 } from "@easyclaw/gateway";
 import type { OAuthFlowResult, AcquiredOAuthCredentials, AcquiredCodexOAuthCredentials } from "@easyclaw/gateway";
 import type { GatewayState } from "@easyclaw/gateway";
 import { parseProxyUrl, formatError, resolveGatewayPort, resolvePanelPort, resolveProxyRouterPort } from "@easyclaw/core";
-import { resolveUpdateMarkerPath, resolveEasyClawHome } from "@easyclaw/core/node";
+import { resolveUpdateMarkerPath, resolveHeartbeatPath, resolveEasyClawHome } from "@easyclaw/core/node";
 import { createStorage } from "@easyclaw/storage";
 import { createSecretStore } from "@easyclaw/secrets";
 import { ArtifactPipeline, syncSkillsForRule, cleanupSkillsForDeletedRule } from "@easyclaw/rules";
@@ -45,11 +47,20 @@ import { startPanelServer, pushChatSSE } from "./panel-server.js";
 import { stopCS } from "./customer-service-bridge.js";
 import { SttManager } from "./stt-manager.js";
 import { createCdpManager } from "./cdp-manager.js";
+import { CdpCookieAdapter } from "./browser-profiles/cdp-cookie-adapter.js";
 import { resolveProxyRouterConfigPath, detectSystemProxy, writeProxyRouterConfig, buildProxyEnv, writeProxySetupModule } from "./proxy-manager.js";
 import { createAutoUpdater } from "./auto-updater.js";
 import { resetDevicePairing, cleanupGatewayLock, applyAutoLaunch, migrateOldProviderKeys } from "./startup-utils.js";
 import { initTelemetry } from "./telemetry-init.js";
 import { createGatewayConfigBuilder } from "./gateway-config-builder.js";
+import { AuthSessionManager } from "./auth-session.js";
+import { createSessionStateStack, type SessionStateStack } from "./browser-profiles/session-state-wiring.js";
+import { createCloudBackupProvider } from "./browser-profiles/session-state/backup-provider.js";
+import type { ProfilePolicyResolver } from "./browser-profiles/runtime-service.js";
+import type { BrowserProfileSessionStatePolicy } from "@easyclaw/core";
+import { ManagedBrowserService } from "./browser-profiles/managed-browser-service.js";
+import { proxiedFetch } from "./api-routes/route-utils.js";
+import { buildToolContext } from "./tool-context-builder.js";
 import { checkRuntimeReady, hydrateRuntime } from "./runtime-hydrator.js";
 import { createBootstrapWindow } from "./bootstrap-window.js";
 
@@ -96,55 +107,109 @@ if (existsSync(UPDATE_MARKER)) {
   }
 }
 
-// Ensure only one instance of the desktop app runs at a time.
-// If the lock is held by a stale process (unclean shutdown), kill it and relaunch.
+// ── Single-instance guard ──────────────────────────────────────────────
+//
+// Electron's requestSingleInstanceLock() prevents duplicate instances.
+// However, it alone can't distinguish between two scenarios when the lock
+// is already held:
+//
+//   1. Healthy instance — a normal running app holds the lock.
+//      → The new instance should exit quietly; the existing one will show
+//        its window via the 'second-instance' event.
+//
+//   2. Stale instance — the old process hung or crashed without releasing
+//      the lock (e.g. after a failed auto-update, or an unclean shutdown
+//      where the OS didn't reclaim the socket/pipe).
+//      → The new instance must kill the stale process and relaunch,
+//        otherwise the user is stuck and can never open the app.
+//
+// To tell them apart, the running instance writes a heartbeat file
+// (~/.easyclaw/heartbeat.json) containing { pid, ts } every 10 seconds.
+// When a second instance can't acquire the lock, it reads the heartbeat:
+//   - ts < 30s old  →  healthy, exit
+//   - ts > 30s old or missing  →  stale, kill & relaunch
+//
+// The heartbeat file is cleaned up on normal exit (both before-quit and
+// auto-updater cleanup paths).
+const HEARTBEAT_PATH = resolveHeartbeatPath();
+const HEARTBEAT_INTERVAL_MS = 10_000;
+const HEARTBEAT_STALE_MS = 30_000;
+
+function writeHeartbeat(): void {
+  try {
+    writeFileSync(HEARTBEAT_PATH, JSON.stringify({ pid: process.pid, ts: Date.now() }));
+  } catch { }
+}
+
+function removeHeartbeat(): void {
+  try { unlinkSync(HEARTBEAT_PATH); } catch { }
+}
+
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
-  let killedStale = false;
+  let isStale = true;
   try {
-    if (process.platform === "win32") {
-      // On Windows, use WMIC to find EasyClaw.exe PIDs
-      const out = execSync('wmic process where "name=\'EasyClaw.exe\'" get ProcessId 2>nul', {
-        encoding: "utf-8",
-        timeout: 3000,
-      }).trim();
-      const pids = out
-        .split("\n")
-        .slice(1) // skip header row
-        .map((line) => parseInt(line.trim(), 10))
-        .filter((pid) => pid !== process.pid && !isNaN(pid));
-      for (const pid of pids) {
-        try {
-          process.kill(pid, "SIGKILL");
-          killedStale = true;
-        } catch { }
-      }
-    } else {
-      // On macOS/Linux, use pgrep
-      const out = execSync("pgrep -x EasyClaw 2>/dev/null || true", {
-        encoding: "utf-8",
-        timeout: 3000,
-      }).trim();
-      const pids = out
-        .split("\n")
-        .filter(Boolean)
-        .map(Number)
-        .filter((pid) => pid !== process.pid && !isNaN(pid));
-      for (const pid of pids) {
-        try {
-          process.kill(pid, "SIGKILL");
-          killedStale = true;
-        } catch { }
+    if (existsSync(HEARTBEAT_PATH)) {
+      const data = JSON.parse(readFileSync(HEARTBEAT_PATH, "utf-8"));
+      const age = Date.now() - data.ts;
+      if (age < HEARTBEAT_STALE_MS) {
+        // Heartbeat is fresh — existing instance is healthy
+        isStale = false;
       }
     }
   } catch { }
 
-  if (killedStale) {
-    // Stale process found and killed — relaunch so the new instance gets the lock
-    app.relaunch();
+  if (isStale) {
+    // Stale or unresponsive process — kill it and relaunch
+    let killedStale = false;
+    try {
+      if (process.platform === "win32") {
+        const out = execSync('wmic process where "name=\'EasyClaw.exe\'" get ProcessId 2>nul', {
+          encoding: "utf-8",
+          timeout: 3000,
+        }).trim();
+        const pids = out
+          .split("\n")
+          .slice(1)
+          .map((line) => parseInt(line.trim(), 10))
+          .filter((pid) => pid !== process.pid && !isNaN(pid));
+        for (const pid of pids) {
+          try {
+            process.kill(pid, "SIGKILL");
+            killedStale = true;
+          } catch { }
+        }
+      } else {
+        const out = execSync("pgrep -x EasyClaw 2>/dev/null || true", {
+          encoding: "utf-8",
+          timeout: 3000,
+        }).trim();
+        const pids = out
+          .split("\n")
+          .filter(Boolean)
+          .map(Number)
+          .filter((pid) => pid !== process.pid && !isNaN(pid));
+        for (const pid of pids) {
+          try {
+            process.kill(pid, "SIGKILL");
+            killedStale = true;
+          } catch { }
+        }
+      }
+    } catch { }
+
+    if (killedStale) {
+      removeHeartbeat();
+      app.relaunch();
+    }
   }
+
   app.exit(0);
 }
+
+// Lock acquired — start heartbeat so future instances can detect us as healthy
+writeHeartbeat();
+const singleInstanceHeartbeat = setInterval(writeHeartbeat, HEARTBEAT_INTERVAL_MS);
 
 app.on("second-instance", () => {
   log.warn("Attempted to start second instance - showing existing window");
@@ -244,6 +309,10 @@ app.whenReady().then(async () => {
   const locale = app.getLocale().startsWith("zh") ? "zh" : "en";
   const { client: telemetryClient, heartbeatTimer } = initTelemetry(storage, deviceId, locale);
 
+  // Initialize auth session manager
+  const authSession = new AuthSessionManager(secretStore, locale, proxiedFetch);
+  await authSession.loadFromKeychain();
+
   // --- First-start OpenClaw import ---
   // Only show the import wizard for truly new users:
   //  1. openclaw_import_checked is not set (never checked before)
@@ -332,12 +401,34 @@ app.whenReady().then(async () => {
     ? join(process.resourcesPath, "extensions")
     : resolve(dirname(fileURLToPath(import.meta.url)), "../../../extensions");
 
-  // Temporary storage for pending OAuth credentials (between acquire and save steps)
-  let pendingOAuthCreds: AcquiredOAuthCredentials | AcquiredCodexOAuthCredentials | null = null;
-  // Track which provider the pending creds belong to
-  let pendingOAuthProvider: string | null = null;
-  // PKCE verifier for pending manual OAuth flow (between start and manual-complete steps)
-  let pendingManualOAuthVerifier: string | null = null;
+  // Pending OAuth flow state (replaces scalar variables with a flow map for async/non-blocking flows)
+  interface PendingOAuthFlow {
+    provider: string;
+    authUrl: string;
+    status: "pending" | "completed" | "failed";
+    creds?: AcquiredOAuthCredentials | AcquiredCodexOAuthCredentials;
+    error?: string;
+    _createdAt: number;
+    // Gemini
+    verifier?: string;
+    cancelCallback?: () => void;
+    // Codex
+    resolveManualInput?: (url: string) => void;
+    rejectManualInput?: (err: Error) => void;
+    completionPromise?: Promise<AcquiredOAuthCredentials | AcquiredCodexOAuthCredentials>;
+  }
+  const pendingOAuthFlows = new Map<string, PendingOAuthFlow>();
+
+  // Clean up abandoned OAuth flows every 5 minutes
+  setInterval(() => {
+    const now = Date.now();
+    for (const [id, flow] of pendingOAuthFlows) {
+      if (now - flow._createdAt > 10 * 60 * 1000) {
+        pendingOAuthFlows.delete(id);
+        log.info(`Cleaned up abandoned OAuth flow ${id}`);
+      }
+    }
+  }, 5 * 60 * 1000);
 
   // One-time backfill: ensure existing allowFrom entries have channel_recipients rows as owners
   const { backfillOwnerMigration } = await import("./owner-migration.js");
@@ -345,10 +436,10 @@ app.whenReady().then(async () => {
 
   // Build gateway config helpers (closures bound to current settings)
   const { buildFullGatewayConfig } = createGatewayConfigBuilder({
-    storage, locale, configPath, stateDir, extensionsDir, sttCliPath, filePermissionsPluginPath,
+    storage, secretStore, locale, configPath, stateDir, extensionsDir, sttCliPath, filePermissionsPluginPath, authSession,
   });
 
-  writeGatewayConfig(buildFullGatewayConfig());
+  writeGatewayConfig(await buildFullGatewayConfig());
 
   // Clean up any existing openclaw processes before starting.
   // First do a fast TCP probe (~1ms) to check if the port is in use.
@@ -399,17 +490,22 @@ app.whenReady().then(async () => {
   // The OpenClaw CLI writes "jobId" but the gateway service indexes jobs by "id".
   normalizeCronStoreIds(join(stateDir, "cron", "jobs.json"));
 
-  // In packaged app, vendor lives in Resources/vendor/openclaw (extraResources).
-  // In dev, resolveVendorEntryPath() resolves relative to source via import.meta.url.
+  // In packaged app, the runtime archive is extracted on first launch to a
+  // content-addressed directory under ~/.easyclaw/runtime/{hash}/. Subsequent
+  // launches skip extraction if the hash matches (fast path, ~1ms).
+  // In dev, resolveVendorDir() resolves relative to source via import.meta.url.
   let vendorDir = "";
   if (app.isPackaged) {
     const archiveDir = join(process.resourcesPath, "runtime-archive");
     const runtimeBaseDir = join(resolveEasyClawHome(), "runtime");
+
+    // Quick check — is the runtime already hydrated?
     const existingRuntime = checkRuntimeReady(archiveDir, runtimeBaseDir);
 
     if (existingRuntime) {
       vendorDir = existingRuntime;
     } else {
+      // Need extraction — show bootstrap splash window
       const bootstrap = createBootstrapWindow();
       bootstrap.show();
 
@@ -435,6 +531,7 @@ app.whenReady().then(async () => {
             app.quit();
             return;
           }
+          // Loop continues — retry extraction
         }
       }
     }
@@ -499,6 +596,46 @@ app.whenReady().then(async () => {
         // Initialize event bridge plugin so it captures the gateway broadcast function
         rpcClient?.request("event_bridge_init", {})
           .catch((e: unknown) => log.debug("Event bridge init (may not be loaded):", e));
+
+        // Push tool contexts for all existing selections to gateway plugin
+        if (authSession?.getAccessToken()) {
+          const scopes = storage.toolSelections.listScopes();
+          for (const { scopeType, scopeKey } of scopes) {
+            buildToolContext(scopeType, scopeKey, storage, authSession)
+              .then(toolCtx => {
+                rpcClient?.request("browser_profiles_set_run_context", toolCtx)
+                  .catch((e: unknown) => log.debug(`Failed to push tool context for ${scopeType}:${scopeKey}:`, e));
+              })
+              .catch((e: unknown) => log.debug(`Failed to build tool context for ${scopeType}:${scopeKey}:`, e));
+          }
+
+          // Push default tool context for enabled cron jobs that don't have explicit selections.
+          // This ensures scheduled cron runs have context available even if the user never
+          // opened the cron page or configured selections — the server will apply default presets.
+          rpcClient?.request<{ jobs: Array<{ id: string }> }>("cron.list", { enabled: "enabled", limit: 100 })
+            .then(result => {
+              const existingScopeKeys = new Set(
+                storage.toolSelections.listScopes()
+                  .filter(s => s.scopeType === "cron_job")
+                  .map(s => s.scopeKey)
+              );
+              for (const job of result.jobs) {
+                // Skip jobs that already have explicit selections (already pushed above)
+                if (existingScopeKeys.has(job.id)) continue;
+                buildToolContext("cron_job", job.id, storage, authSession)
+                  .then(toolCtx => {
+                    rpcClient?.request("browser_profiles_set_run_context", toolCtx)
+                      .catch((e: unknown) => log.warn(`Failed to push cron tool context for ${job.id}:`, e));
+                  })
+                  .catch((e: unknown) => log.warn(`Failed to build cron tool context for ${job.id}:`, e));
+              }
+            })
+            .catch((e: unknown) => log.warn("Failed to list cron jobs for tool context push:", e));
+        }
+
+        // Push locally-stored cookies for managed profiles to the gateway plugin
+        pushStoredCookiesToGateway()
+          .catch((e: unknown) => log.debug("Failed to push stored cookies to gateway (best-effort):", e));
       },
       onClose: () => {
         log.info("Gateway RPC client disconnected");
@@ -519,6 +656,26 @@ app.whenReady().then(async () => {
             seq?: number;
           };
           pushChatSSE("chat-mirror", p);
+        }
+        // When a cron job is added/updated, push tool context for enabled jobs
+        // so scheduled runs have browser profile context available.
+        // This covers all mutation paths (panel UI, AI agent tool calls, CLI).
+        if (evt.event === "cron") {
+          const cronEvt = evt.payload as { jobId?: string; action?: string } | undefined;
+          if (cronEvt?.jobId && (cronEvt.action === "added" || cronEvt.action === "updated")) {
+            // Query the job to check if it's enabled before pushing context
+            rpcClient?.request<{ id: string; enabled: boolean }>("cron.get", { id: cronEvt.jobId })
+              .then(job => {
+                if (!job?.enabled) return;
+                buildToolContext("cron_job", job.id, storage, authSession)
+                  .then(toolCtx => {
+                    rpcClient?.request("browser_profiles_set_run_context", toolCtx)
+                      .catch((e: unknown) => log.warn(`Failed to push cron tool context for ${job.id}:`, e));
+                  })
+                  .catch((e: unknown) => log.warn(`Failed to build cron tool context for ${job.id}:`, e));
+              })
+              .catch((e: unknown) => log.debug(`Failed to query cron job ${cronEvt.jobId}:`, e));
+          }
         }
         if (evt.event === "mobile.inbound") {
           const p = evt.payload as { sessionKey?: string; message?: string; timestamp?: number; channel?: string; mediaPaths?: string[] } | undefined;
@@ -550,6 +707,7 @@ app.whenReady().then(async () => {
             });
           }
         }
+
       },
     });
 
@@ -560,6 +718,68 @@ app.whenReady().then(async () => {
     if (rpcClient) {
       rpcClient.stop();
       rpcClient = null;
+    }
+  }
+
+  /**
+   * Push locally-stored (decrypted) cookies for all managed profiles to the
+   * gateway plugin so it can restore them via CDP on browser_session_start.
+   *
+   * Best-effort: errors are logged and swallowed.
+   */
+  async function pushStoredCookiesToGateway(): Promise<void> {
+    if (!rpcClient) return;
+    const stack = sessionStateStackRef;
+    if (!stack) return;
+
+    // Iterate over all managed browser entries that are running/allocated
+    const entries = managedBrowserService.getAllEntries();
+    for (const entry of entries) {
+      try {
+        const raw = await stack.store.readCookieSnapshot("managed_profile", entry.profileId);
+        if (!raw) continue;
+        const cookies = JSON.parse(raw.toString("utf-8"));
+        if (!Array.isArray(cookies) || cookies.length === 0) continue;
+
+        await rpcClient.request("browser_profiles_push_cookies", {
+          profileName: entry.profileId,
+          cookies,
+          cdpPort: entry.port,
+        });
+        log.debug(`Pushed ${cookies.length} stored cookies for profile ${entry.profileId} to gateway`);
+      } catch (e: unknown) {
+        log.debug(`Failed to push stored cookies for profile ${entry.profileId} (best-effort):`, e);
+      }
+    }
+  }
+
+  /**
+   * Pull captured cookies from the gateway plugin for a profile and persist
+   * them locally (encrypted).
+   *
+   * Best-effort: errors are logged and swallowed.
+   */
+  async function pullAndPersistCookies(profileName: string): Promise<void> {
+    if (!rpcClient) return;
+    const stack = sessionStateStackRef;
+    if (!stack) return;
+
+    try {
+      const result = await rpcClient.request<{ cookies: Array<Record<string, unknown>> }>(
+        "browser_profiles_pull_cookies",
+        { profileName },
+      );
+      if (!result?.cookies || !Array.isArray(result.cookies) || result.cookies.length === 0) {
+        log.debug(`No cookies returned from gateway for profile ${profileName}`);
+        return;
+      }
+
+      const payload = Buffer.from(JSON.stringify(result.cookies), "utf-8");
+      await stack.store.ensureDir("managed_profile", profileName);
+      await stack.store.writeCookieSnapshot("managed_profile", profileName, payload);
+      log.info(`Pulled and persisted ${result.cookies.length} cookies for profile ${profileName} from gateway`);
+    } catch (e: unknown) {
+      log.debug(`Failed to pull cookies for profile ${profileName} (best-effort):`, e);
     }
   }
 
@@ -614,7 +834,7 @@ app.whenReady().then(async () => {
     log.info("STT settings changed, regenerating config and restarting gateway");
 
     // Regenerate full OpenClaw config (reads current STT settings from storage)
-    writeGatewayConfig(buildFullGatewayConfig());
+    writeGatewayConfig(await buildFullGatewayConfig());
 
     // Rebuild environment with updated STT credentials (GROQ_API_KEY, etc.)
     const secretEnv = await buildGatewayEnv(secretStore, { ELECTRON_RUN_AS_NODE: "1" }, storage, workspacePath);
@@ -624,6 +844,25 @@ app.whenReady().then(async () => {
     await sttManager.initialize().catch((err) => {
       log.error("Failed to reinitialize STT manager:", err);
     });
+
+    // Full restart to apply new environment variables and config
+    await launcher.stop();
+    await launcher.start();
+  }
+
+  /**
+   * Called when web search or embedding settings/credentials change.
+   * Regenerates gateway config and restarts gateway to apply new env vars.
+   */
+  async function handleExtrasChange(): Promise<void> {
+    log.info("Extras settings changed, regenerating config and restarting gateway");
+
+    // Regenerate full OpenClaw config (reads current web search / embedding settings from storage)
+    writeGatewayConfig(await buildFullGatewayConfig());
+
+    // Rebuild environment with updated credentials (BRAVE_API_KEY, VOYAGE_API_KEY, etc.)
+    const secretEnv = await buildGatewayEnv(secretStore, { ELECTRON_RUN_AS_NODE: "1" }, storage, workspacePath);
+    launcher.setEnv({ ...secretEnv, ...buildFullProxyEnv() });
 
     // Full restart to apply new environment variables and config
     await launcher.stop();
@@ -646,7 +885,35 @@ app.whenReady().then(async () => {
     await launcher.start();
   }
 
-  const cdpManager = createCdpManager({ storage, launcher, writeGatewayConfig, buildFullGatewayConfig });
+  // Late-bound reference: sessionStateStack is created after cdpManager,
+  // so we capture it via a mutable binding that the callback closes over.
+  // eslint-disable-next-line prefer-const -- assigned later, after cdpManager creation
+  let sessionStateStackRef = null as SessionStateStack | null;
+
+  const cdpManager = createCdpManager({
+    storage,
+    launcher,
+    writeGatewayConfig,
+    buildFullGatewayConfig,
+    onCdpReady: (port) => {
+      const stack = sessionStateStackRef;
+      if (!stack) {
+        log.warn("onCdpReady fired before sessionStateStack initialized — skipping session start");
+        return;
+      }
+      // Check if CDP session-state tracking is enabled (default: true)
+      const cdpSessionEnabled = storage.settings.get("session-state-cdp-enabled");
+      if (cdpSessionEnabled === "false") {
+        log.info("CDP session-state tracking disabled by user setting — skipping");
+        return;
+      }
+      // CDP compatibility session — uses "__cdp__" as the scope key since
+      // CDP mode operates on the user's existing Chrome, not an EasyClaw-managed profile.
+      const adapter = new CdpCookieAdapter(port);
+      stack.lifecycleManager.startSession("__cdp__", adapter, "cdp")
+        .catch((err: unknown) => log.warn("Failed to start CDP session state tracking:", err));
+    },
+  });
 
   /**
    * Called when provider settings change (API key added/removed, default changed, proxy changed).
@@ -691,7 +958,7 @@ app.whenReady().then(async () => {
     }
 
     // Rewrite full OpenClaw config (reads current provider/model from storage)
-    writeGatewayConfig(buildFullGatewayConfig());
+    writeGatewayConfig(await buildFullGatewayConfig());
 
     // Full gateway restart to ensure model change takes effect.
     // SIGUSR1 graceful reload re-reads config but agent sessions keep their
@@ -936,8 +1203,29 @@ app.whenReady().then(async () => {
 
   launcher.on("stopped", () => {
     log.info("Gateway stopped");
-    disconnectRpcClient();
+
+    // Pull cookies from the gateway plugin for all running profiles before
+    // disconnecting the RPC client. Best-effort: failures are logged.
+    const runningProfiles = managedBrowserService.getRunningProfiles();
+    const pullPromises = runningProfiles.map(profileId =>
+      pullAndPersistCookies(profileId)
+        .catch((e: unknown) => log.debug(`Failed to pull cookies for ${profileId} on gateway stop:`, e)),
+    );
+    Promise.all(pullPromises)
+      .catch(() => {}) // swallow aggregate errors
+      .finally(() => {
+        disconnectRpcClient();
+      });
+
     updateTray("stopped");
+
+    // Gateway stopped -- managed browsers lose their runtime
+    managedBrowserService.shutdown()
+      .catch(err => log.warn("Failed to shutdown managed browser service:", err));
+
+    // End any remaining sessions (CDP compatibility)
+    sessionStateStack.lifecycleManager.endAllSessions()
+      .catch((err) => log.warn("Failed to end sessions on gateway stop:", err));
   });
 
   launcher.on("restarting", (attempt, delayMs) => {
@@ -1003,6 +1291,41 @@ app.whenReady().then(async () => {
   const sttManager = new SttManager(storage, secretStore);
   await sttManager.initialize();
 
+  // Initialize session state stack for browser profile session persistence.
+  // The policy resolver reads sessionStatePolicy from the canonical cloud
+  // BrowserProfile model. For CDP-only profiles (__cdp__) or when auth is
+  // unavailable, it returns null so the runtime falls back to defaults.
+  const policyResolver: ProfilePolicyResolver = async (profileId: string) => {
+    if (profileId === "__cdp__") return null;
+    if (!authSession?.getAccessToken()) return null;
+    try {
+      const data = await authSession.graphqlFetch<{
+        browserProfile: { sessionStatePolicy: BrowserProfileSessionStatePolicy } | null;
+      }>(
+        `query ($id: ID!) { browserProfile(id: $id) { sessionStatePolicy { enabled checkpointIntervalSec mode storage } } }`,
+        { id: profileId },
+      );
+      if (!data.browserProfile?.sessionStatePolicy) return null;
+      const sp = data.browserProfile.sessionStatePolicy;
+      return {
+        mode: sp.mode as BrowserProfileSessionStatePolicy["mode"],
+        checkpointIntervalSec: sp.checkpointIntervalSec,
+        storage: sp.storage as BrowserProfileSessionStatePolicy["storage"],
+      };
+    } catch {
+      return null; // Fall back to default policy on network failure
+    }
+  };
+  const backupProvider = authSession ? createCloudBackupProvider(authSession) : undefined;
+  const sessionStateStack = await createSessionStateStack(join(stateDir, "session-state"), secretStore, policyResolver, backupProvider);
+  sessionStateStackRef = sessionStateStack;
+
+  // Create managed browser service for multi-profile browser management
+  const managedBrowserService = new ManagedBrowserService(
+    sessionStateStack.lifecycleManager,
+    join(stateDir, "managed-browsers"),
+  );
+
   // Start the panel server
   const panelDistDir = app.isPackaged
     ? join(process.resourcesPath, "panel-dist")
@@ -1013,6 +1336,7 @@ app.whenReady().then(async () => {
     panelDistDir,
     changelogPath,
     vendorDir,
+    nodeBin: process.execPath,
     storage,
     secretStore,
     deviceId,
@@ -1081,80 +1405,179 @@ app.whenReady().then(async () => {
         log.error("Failed to handle STT change:", err);
       });
     },
+    onExtrasChange: () => {
+      handleExtrasChange().catch((err) => {
+        log.error("Failed to handle extras change:", err);
+      });
+    },
     onPermissionsChange: () => {
       handlePermissionsChange().catch((err) => {
         log.error("Failed to handle permissions change:", err);
       });
     },
+    sessionLifecycleManager: sessionStateStack.lifecycleManager,
+    managedBrowserService,
     onBrowserChange: () => {
-      cdpManager.handleBrowserChange().catch((err: unknown) => {
-        log.error("Failed to handle browser change:", err);
-      });
+      // End all session state tracking BEFORE reconfiguring browser mode.
+      // Sessions must flush while the browser is still running.
+      managedBrowserService.shutdown()
+        .catch((err: unknown) => log.error("Failed to shutdown managed browsers on change:", err))
+        .finally(() => {
+          sessionStateStack.lifecycleManager.endAllSessions()
+            .catch((err: unknown) => log.error("Failed to end sessions on browser change:", err))
+            .finally(() => {
+              cdpManager.handleBrowserChange().catch((err: unknown) => {
+                log.error("Failed to handle browser change:", err);
+              });
+            });
+        });
     },
     onAutoLaunchChange: (enabled: boolean) => {
       applyAutoLaunch(enabled);
     },
-    onOAuthAcquire: async (provider: string): Promise<{ email?: string; tokenPreview: string; manualMode?: boolean; authUrl?: string }> => {
+    onOAuthAcquire: async (provider: string) => {
       const proxyRouterUrl = `http://127.0.0.1:${resolveProxyRouterPort()}`;
+      const flowId = randomUUID();
 
-      // OpenAI Codex OAuth flow
       if (provider === "openai-codex") {
-        const acquired = await acquireCodexOAuthToken({
+        const hybrid = await startHybridCodexOAuthFlow({
           openUrl: (url) => shell.openExternal(url),
           onStatusUpdate: (msg) => log.info(`OAuth: ${msg}`),
           proxyUrl: proxyRouterUrl,
         }, vendorDir);
-        pendingOAuthCreds = acquired;
-        pendingOAuthProvider = provider;
-        log.info(`Codex OAuth acquired for ${provider}`);
-        return { email: acquired.email, tokenPreview: acquired.tokenPreview };
+
+        const flow: PendingOAuthFlow = {
+          provider,
+          authUrl: hybrid.authUrl,
+          status: "pending",
+          _createdAt: Date.now(),
+          resolveManualInput: hybrid.resolveManualInput,
+          rejectManualInput: hybrid.rejectManualInput,
+          completionPromise: hybrid.completionPromise,
+        };
+
+        // Background: when auto flow completes, update flow status
+        hybrid.completionPromise
+          .then((creds) => {
+            flow.status = "completed";
+            flow.creds = creds;
+            log.info(`Codex OAuth auto-completed for flow ${flowId}`);
+          })
+          .catch((err) => {
+            if (flow.status === "pending") {
+              flow.status = "failed";
+              flow.error = err instanceof Error ? err.message : String(err);
+              log.error(`Codex OAuth failed for flow ${flowId}:`, flow.error);
+            }
+          });
+
+        pendingOAuthFlows.set(flowId, flow);
+        log.info(`Codex hybrid OAuth started, flowId=${flowId}`);
+        return { email: undefined, tokenPreview: "", manualMode: true, authUrl: hybrid.authUrl, flowId };
       }
 
-      // Gemini OAuth flow (default)
-      try {
-        const acquired = await acquireGeminiOAuthToken({
-          openUrl: (url) => shell.openExternal(url),
-          onStatusUpdate: (msg) => log.info(`OAuth: ${msg}`),
-          proxyUrl: proxyRouterUrl,
+      // Gemini OAuth
+      const hybrid = await startHybridGeminiOAuthFlow({
+        onStatusUpdate: (msg) => log.info(`OAuth: ${msg}`),
+        proxyUrl: proxyRouterUrl,
+      });
+
+      await shell.openExternal(hybrid.authUrl);
+
+      const flow: PendingOAuthFlow = {
+        provider,
+        authUrl: hybrid.authUrl,
+        status: "pending",
+        _createdAt: Date.now(),
+        verifier: hybrid.verifier,
+        cancelCallback: hybrid.cancel,
+        completionPromise: hybrid.completionPromise,
+      };
+
+      // Background: when auto callback completes, update flow status
+      hybrid.completionPromise
+        .then((creds) => {
+          flow.status = "completed";
+          flow.creds = creds;
+          log.info(`Gemini OAuth auto-completed for flow ${flowId}`);
+        })
+        .catch((err) => {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes("cancelled")) {
+            // Intentional cancellation (manual-complete took over)
+          } else {
+            flow.status = "failed";
+            flow.error = msg;
+            log.error(`Gemini OAuth auto-callback failed for flow ${flowId}: ${msg}`);
+          }
         });
-        // Store credentials temporarily until onOAuthSave is called
-        pendingOAuthCreds = acquired;
-        pendingOAuthProvider = provider;
-        log.info(`OAuth acquired for ${provider}, email=${acquired.email ?? "(none)"}`);
-        return { email: acquired.email, tokenPreview: acquired.tokenPreview };
-      } catch (err) {
-        const msg = formatError(err);
-        if (msg.includes("Port 8085") || msg.includes("EADDRINUSE")) {
-          log.warn("OAuth callback server failed, falling back to manual mode");
-          const manual = await startManualOAuthFlow({
-            onStatusUpdate: (m: string) => log.info(`OAuth manual: ${m}`),
-            proxyUrl: proxyRouterUrl,
-          });
-          pendingManualOAuthVerifier = manual.verifier;
-          pendingOAuthProvider = provider;
-          await shell.openExternal(manual.authUrl);
-          return { email: undefined, tokenPreview: "", manualMode: true, authUrl: manual.authUrl };
-        }
-        throw err;
-      }
+
+      pendingOAuthFlows.set(flowId, flow);
+      log.info(`Gemini hybrid OAuth started, flowId=${flowId}`);
+      return { email: undefined, tokenPreview: "", manualMode: true, authUrl: hybrid.authUrl, flowId };
     },
-    onOAuthManualComplete: async (provider: string, callbackUrl: string): Promise<{ email?: string; tokenPreview: string }> => {
-      const verifier = pendingManualOAuthVerifier;
-      if (!verifier) {
-        throw new Error("No pending manual OAuth flow. Please start the sign-in process first.");
+    onOAuthManualComplete: async (provider: string, callbackUrl: string) => {
+      // Find the pending flow for this provider
+      let flowId: string | undefined;
+      let flow: PendingOAuthFlow | undefined;
+      for (const [id, f] of pendingOAuthFlows) {
+        if (f.provider === provider && f.status === "pending") {
+          flowId = id;
+          flow = f;
+          break;
+        }
       }
+      if (!flow || !flowId) {
+        throw new Error("No pending OAuth flow. Please start the sign-in process first.");
+      }
+
       const proxyRouterUrl = `http://127.0.0.1:${resolveProxyRouterPort()}`;
-      const acquired = await completeManualOAuthFlow(callbackUrl, verifier, proxyRouterUrl);
-      pendingOAuthCreds = acquired;
-      pendingManualOAuthVerifier = null;
-      log.info(`OAuth manual complete for ${provider}, email=${acquired.email ?? "(none)"}`);
+
+      if (provider === "openai-codex") {
+        // Resolve the manual input promise — the vendor's loginOpenAICodex handles the rest
+        if (!flow.resolveManualInput) {
+          throw new Error("Codex flow missing manual input resolver");
+        }
+        if (flow.status !== "pending") {
+          // Auto-callback already completed — return its result
+          return { email: (flow.creds as any)?.email, tokenPreview: (flow.creds as any)?.tokenPreview ?? "" };
+        }
+        flow.resolveManualInput(callbackUrl);
+        // Wait for the vendor flow to complete with the manual input
+        const creds = await flow.completionPromise!;
+        flow.status = "completed";
+        flow.creds = creds;
+        log.info(`Codex OAuth manual-completed for flow ${flowId}`);
+        return { email: (creds as AcquiredCodexOAuthCredentials).email, tokenPreview: (creds as AcquiredCodexOAuthCredentials).tokenPreview };
+      }
+
+      // Gemini: use existing completeManualOAuthFlow
+      if (!flow.verifier) {
+        throw new Error("Gemini flow missing verifier");
+      }
+      // Cancel the background callback server
+      flow.cancelCallback?.();
+      const acquired = await completeManualOAuthFlow(callbackUrl, flow.verifier, proxyRouterUrl);
+      flow.status = "completed";
+      flow.creds = acquired;
+      log.info(`Gemini OAuth manual-completed for flow ${flowId}, email=${acquired.email ?? "(none)"}`);
       return { email: acquired.email, tokenPreview: acquired.tokenPreview };
     },
     onOAuthSave: async (provider: string, options: { proxyUrl?: string; label?: string; model?: string }): Promise<OAuthFlowResult> => {
-      if (!pendingOAuthCreds) {
+      // Find completed flow for this provider
+      let flowId: string | undefined;
+      let flow: PendingOAuthFlow | undefined;
+      for (const [id, f] of pendingOAuthFlows) {
+        if (f.provider === provider && f.status === "completed" && f.creds) {
+          flowId = id;
+          flow = f;
+          break;
+        }
+      }
+      if (!flow || !flow.creds || !flowId) {
         throw new Error("No pending OAuth credentials. Please sign in first.");
       }
-      const creds = pendingOAuthCreds;
+      const creds = flow.creds;
 
       // Parse proxy URL if provided
       let proxyBaseUrl: string | null = null;
@@ -1171,10 +1594,7 @@ app.whenReady().then(async () => {
       let result: OAuthFlowResult;
       let activeProvider: string;
 
-      if (pendingOAuthProvider === "openai-codex") {
-        // OpenAI Codex OAuth save — skip validation; the successful OAuth flow
-        // is sufficient proof the token is valid, and Codex tokens don't have
-        // access to the standard /v1/models endpoint used for validation.
+      if (provider === "openai-codex") {
         const codexCreds = creds as AcquiredCodexOAuthCredentials;
         result = await saveCodexOAuthCredentials(codexCreds.credentials, storage, secretStore, {
           proxyBaseUrl,
@@ -1184,7 +1604,6 @@ app.whenReady().then(async () => {
         });
         activeProvider = "openai-codex";
       } else {
-        // Gemini OAuth save (default)
         const geminiCreds = creds as AcquiredOAuthCredentials;
         const validation = await validateGeminiAccessToken(geminiCreds.credentials.access, validationProxy, geminiCreds.credentials.projectId);
         if (!validation.valid) {
@@ -1199,20 +1618,36 @@ app.whenReady().then(async () => {
         activeProvider = "gemini";
       }
 
-      pendingOAuthCreds = null;
-      pendingOAuthProvider = null;
+      // Clean up the flow
+      pendingOAuthFlows.delete(flowId);
 
       // Sync auth profiles + rewrite full config.
       // Switch the active provider so buildFullGatewayConfig() picks it up.
       storage.settings.set("llm-provider", activeProvider);
       await syncAllAuthProfiles(stateDir, storage, secretStore);
       await writeProxyRouterConfig(storage, secretStore, lastSystemProxy);
-      writeGatewayConfig(buildFullGatewayConfig());
+      writeGatewayConfig(await buildFullGatewayConfig());
       // Restart gateway to pick up new plugin + auth profile
       await launcher.stop();
       await launcher.start();
-      // RPC client reconnects automatically via the "ready" event handler.
       return result;
+    },
+    onOAuthPoll: (flowId: string) => {
+      const flow = pendingOAuthFlows.get(flowId);
+      if (!flow) {
+        return { status: "failed" as const, error: "Unknown flow" };
+      }
+      if (flow.status === "completed" && flow.creds) {
+        return {
+          status: "completed" as const,
+          tokenPreview: (flow.creds as AcquiredOAuthCredentials).tokenPreview ?? "",
+          email: (flow.creds as AcquiredOAuthCredentials).email,
+        };
+      }
+      if (flow.status === "failed") {
+        return { status: "failed" as const, error: flow.error };
+      }
+      return { status: "pending" as const };
     },
     onChannelConfigured: (channelId) => {
       log.info(`Channel configured: ${channelId}`);
@@ -1223,6 +1658,7 @@ app.whenReady().then(async () => {
     onTelemetryTrack: (eventType, metadata) => {
       telemetryClient?.track(eventType, metadata);
     },
+    authSession,
   });
 
   // Sync auth profiles + build env, then start gateway.
@@ -1312,6 +1748,8 @@ app.whenReady().then(async () => {
     clearInterval(proxyPollTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     clearInterval(updateCheckTimer);
+    clearInterval(singleInstanceHeartbeat);
+    removeHeartbeat();
 
     // Same cleanup sequence as the before-quit handler
     stopCS();
@@ -1355,10 +1793,18 @@ app.whenReady().then(async () => {
     clearInterval(proxyPollTimer);
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     clearInterval(updateCheckTimer);
+    clearInterval(singleInstanceHeartbeat);
+    removeHeartbeat();
 
     const cleanup = async () => {
       // Stop customer service bridge (closes relay WS + gateway RPC, rejects pending replies)
       stopCS();
+
+      // Shutdown managed browser service (ends all managed profile sessions)
+      await managedBrowserService.shutdown();
+
+      // Flush any remaining sessions (e.g., CDP compatibility sessions)
+      await sessionStateStack.lifecycleManager.endAllSessions();
 
       // Kill gateway and proxy router FIRST — these are critical.
       // If later steps (telemetry, oauth sync) hang, at least the gateway is dead.
