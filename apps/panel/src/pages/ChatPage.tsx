@@ -18,6 +18,8 @@ import { useSessionManager } from "./chat/useSessionManager.js";
 import { SessionTabBar } from "./chat/SessionTabBar.js";
 import type { GatewaySessionInfo } from "./chat/SessionTabBar.js";
 import { ChatInputArea } from "./chat/ChatInputArea.js";
+import { ToolSelector } from "../components/ToolSelector.js";
+import { useToolRegistry } from "../providers/ToolRegistryProvider.js";
 import "./ChatPage.css";
 
 export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: string | null) => void }) {
@@ -65,6 +67,9 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
   const shouldInstantScrollRef = useRef(true);
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [showToolSelector, setShowToolSelector] = useState(false);
+  const { hasTools } = useToolRegistry();
+  const toolsWrapperRef = useRef<HTMLDivElement>(null);
   const [externalPending, setExternalPending] = useState(false);
   const externalPendingRef = useRef(false);
 
@@ -221,7 +226,6 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
 
   // Prune stale image cache entries (older than 30 days) on mount
   useEffect(() => { clearImages().catch(() => {}); }, []);
-
 
   // Load chat history once connected
   const loadHistory = useCallback(async (client: GatewayChatClient) => {
@@ -985,6 +989,17 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
     }
   }, []);
 
+  useEffect(() => {
+    if (!showToolSelector) return;
+    function handleClickOutside(e: MouseEvent) {
+      if (toolsWrapperRef.current && !toolsWrapperRef.current.contains(e.target as Node)) {
+        setShowToolSelector(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showToolSelector]);
+
   const visibleMessages = messages.slice(Math.max(0, messages.length - visibleCount));
   const showHistoryEnd = allFetched && visibleCount >= messages.length && messages.length > 0;
   const isStreaming = runId !== null;
@@ -1172,6 +1187,25 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
           />
         )}
         <span className="chat-status-spacer" />
+        {hasTools && (
+          <div className="chat-tools-wrapper" ref={toolsWrapperRef}>
+            <button
+              className={`chat-tools-toggle${showToolSelector ? " chat-tools-toggle-active" : ""}`}
+              onClick={() => setShowToolSelector((v) => !v)}
+            >
+              <span className="chat-tools-toggle-icon">&#9881;</span>
+              {t("tools.selector.title")}
+            </button>
+            {showToolSelector && (
+              <div className="chat-tools-popover">
+                <ToolSelector
+                  scopeType="chat_session"
+                  scopeKey={sessionManager.activeSessionKey}
+                />
+              </div>
+            )}
+          </div>
+        )}
         <button
           className="btn btn-sm btn-secondary"
           onClick={handleReset}

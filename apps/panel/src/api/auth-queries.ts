@@ -1,0 +1,140 @@
+import { gql } from "@apollo/client/core";
+
+export const LOGIN_MUTATION = gql`
+  mutation Login($input: LoginInput!) {
+    login(input: $input) {
+      accessToken
+      refreshToken
+      userId
+      email
+      plan
+    }
+  }
+`;
+
+export const REGISTER_MUTATION = gql`
+  mutation Register($input: RegisterInput!) {
+    register(input: $input) {
+      accessToken
+      refreshToken
+      userId
+      email
+      plan
+    }
+  }
+`;
+
+export const REFRESH_TOKEN_MUTATION = gql`
+  mutation RefreshToken($refreshToken: String!) {
+    refreshToken(refreshToken: $refreshToken) {
+      accessToken
+      refreshToken
+      userId
+      email
+      plan
+    }
+  }
+`;
+
+export const ME_QUERY = gql`
+  query Me {
+    me {
+      userId
+      email
+      name
+      plan
+      createdAt
+    }
+  }
+`;
+
+export const PLAN_DEFINITIONS_QUERY = gql`
+  query PlanDefinitions {
+    planDefinitions {
+      planId
+      name
+      maxSeats
+      priceMonthly
+      priceCurrency
+    }
+  }
+`;
+
+export const SUBSCRIPTION_STATUS_QUERY = gql`
+  query SubscriptionStatus {
+    subscriptionStatus {
+      userId
+      plan
+      status
+      seatsUsed
+      seatsMax
+      validUntil
+    }
+  }
+`;
+
+export const CHECKOUT_MUTATION = gql`
+  mutation Checkout($planId: UserPlan!) {
+    checkout(planId: $planId) {
+      userId
+      plan
+      status
+      seatsUsed
+      seatsMax
+      validUntil
+    }
+  }
+`;
+
+export const SEATS_QUERY = gql`
+  query Seats {
+    seats {
+      userId
+      gatewayId
+      status
+      connectedAt
+      createdAt
+    }
+  }
+`;
+
+export const SEAT_USAGE_QUERY = gql`
+  query SeatUsage($period: String) {
+    seatUsage(period: $period) {
+      userId
+      seatId
+      period
+      messageCount
+      tokenUsage
+    }
+  }
+`;
+
+export const ALLOCATE_SEAT_MUTATION = gql`
+  mutation AllocateSeat($gatewayId: String!) {
+    allocateSeat(gatewayId: $gatewayId) {
+      userId
+      gatewayId
+      status
+      connectedAt
+    }
+  }
+`;
+
+export const DEALLOCATE_SEAT_MUTATION = gql`
+  mutation DeallocateSeat($seatId: String!) {
+    deallocateSeat(seatId: $seatId)
+  }
+`;
+
+export const LOGOUT_MUTATION = gql`
+  mutation Logout($refreshToken: String!) {
+    logout(refreshToken: $refreshToken)
+  }
+`;
+
+export const REVOKE_ALL_SESSIONS_MUTATION = gql`
+  mutation RevokeAllSessions {
+    revokeAllSessions
+  }
+`;

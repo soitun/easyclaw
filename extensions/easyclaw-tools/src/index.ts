@@ -9,6 +9,7 @@
  * manifest when the extensions/ directory is in plugins.load.paths.
  */
 
+import { createBrowserModeContext } from "./browser-mode-context.js";
 import { createEasyClawContext } from "./easyclaw-context.js";
 import { createEasyClawTool } from "./tools/easyclaw-tool.js";
 import { createProvidersTool } from "./tools/providers-tool.js";
@@ -17,6 +18,7 @@ import { createProvidersTool } from "./tools/providers-tool.js";
 // Matches the shape provided by OpenClaw's plugin loader.
 type PluginApi = {
   logger: { info: (msg: string) => void };
+  pluginConfig?: Record<string, unknown>;
   on(event: string, handler: (...args: any[]) => any): void;
   registerTool(factory: (ctx: { config?: Record<string, unknown> }) => unknown): void;
 };
@@ -34,6 +36,10 @@ const plugin: PluginDefinition = {
   activate(api: PluginApi): void {
     // Replace OpenClaw CLI section in system prompt with EasyClaw guidance
     api.on("before_prompt_build", createEasyClawContext());
+
+    // Override browser tool description based on configured browser mode
+    const browserMode = (api.pluginConfig?.browserMode as "standalone" | "cdp") || "standalone";
+    api.on("before_prompt_build", createBrowserModeContext(browserMode));
 
     // Register the easyclaw system status tool
     api.registerTool((ctx) => createEasyClawTool({ config: ctx.config }));

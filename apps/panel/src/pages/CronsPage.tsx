@@ -1,10 +1,11 @@
 import { useState, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { trackEvent } from "../api/index.js";
+import { ensureToolContext, fetchToolSelections, saveToolSelections } from "../api/tool-registry.js";
 import { Select } from "../components/Select.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 import { useCronManager } from "./crons/useCronManager.js";
-import { CronJobForm } from "./crons/CronJobForm.js";
+import { CronJobForm, TEMP_CRON_SCOPE_KEY } from "./crons/CronJobForm.js";
 import { CronRunHistory } from "./crons/CronRunHistory.js";
 import type { CronJob, CronListParams } from "./crons/cron-utils.js";
 import { formatSchedule, formatRelativeTime, getTzI18nKey } from "./crons/cron-utils.js";
@@ -71,6 +72,7 @@ export function CronsPage() {
     try {
       setActionError(null);
       setRunningJobId(id);
+      await ensureToolContext("cron_job", id);
       await cron.runJob(id);
       trackEvent("cron.run_now");
     } catch (err) {
@@ -94,9 +96,16 @@ export function CronsPage() {
 
   const handleFormSubmit = useCallback(async (params: Record<string, unknown>) => {
     const isCreate = !editingJob;
-    await (editingJob
-      ? cron.updateJob(editingJob.id, params)
-      : cron.addJob(params));
+    if (editingJob) {
+      await cron.updateJob(editingJob.id, params);
+    } else {
+      const newJob = await cron.addJob(params);
+      // Copy tool selections from temporary scope to the real job ID
+      const tempSelections = await fetchToolSelections("cron_job", TEMP_CRON_SCOPE_KEY);
+      if (tempSelections.length > 0) {
+        await saveToolSelections("cron_job", newJob.id, tempSelections);
+      }
+    }
     if (isCreate) trackEvent("cron.created");
     setFormOpen(false);
     setEditingJob(null);

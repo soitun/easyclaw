@@ -25,6 +25,7 @@ export interface ApiContext {
   onExtrasChange?: () => void;
   onPermissionsChange?: () => void;
   onBrowserChange?: () => void;
+  onAuthChange?: () => void;
   onAutoLaunchChange?: (enabled: boolean) => void;
   onChannelConfigured?: (channelId: string) => void;
   onOAuthFlow?: (provider: string) => Promise<{ providerKeyId: string; email?: string; provider: string }>;

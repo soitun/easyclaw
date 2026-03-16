@@ -7,13 +7,15 @@ import { RulesPage } from "./pages/RulesPage.js";
 import { ProvidersPage } from "./pages/ProvidersPage.js";
 import { ChannelsPage } from "./pages/ChannelsPage.js";
 import { PermissionsPage } from "./pages/PermissionsPage.js";
-import { SttPage } from "./pages/SttPage.js";
+import { ExtrasPage } from "./pages/ExtrasPage.js";
 import { KeyUsagePage } from "./pages/KeyUsagePage.js";
 import { SkillsPage } from "./pages/SkillsPage.js";
 import { CronsPage } from "./pages/CronsPage.js";
 import { SettingsPage } from "./pages/SettingsPage.js";
 import { AppsPage } from "./pages/AppsPage.js";
 import { OnboardingPage } from "./pages/OnboardingPage.js";
+import { AccountPage } from "./pages/AccountPage.js";
+import { BrowserProfilesPage } from "./pages/BrowserProfilesPage.js";
 import { WhatsNewModal } from "./components/WhatsNewModal.js";
 import { TelemetryConsentModal } from "./components/TelemetryConsentModal.js";
 import { fetchSettings, fetchChangelog, trackEvent } from "./api/index.js";
@@ -25,12 +27,14 @@ const PAGES: Record<string, () => ReactNode> = {
   "/providers": ProvidersPage,
   "/channels": ChannelsPage,
   "/permissions": PermissionsPage,
-  "/stt": SttPage,
+  "/extras": ExtrasPage,
   "/usage": KeyUsagePage,
   "/skills": SkillsPage,
   "/crons": CronsPage,
-  "/apps": AppsPage,
+  "/apps": () => null, // Rendered separately below (needs onNavigate prop)
+  "/browser-profiles": () => null, // Rendered separately below (needs onNavigate prop)
   "/settings": SettingsPage,
+  "/account": () => null, // Rendered separately below (needs onNavigate prop)
 };
 
 /** Normalise a browser pathname to one of our known routes, defaulting to "/" */
@@ -142,7 +146,8 @@ export function App() {
     return <OnboardingPage onComplete={handleOnboardingComplete} />;
   }
 
-  const OtherPage = currentPath !== "/" && currentPath !== "/channels" ? PAGES[currentPath] : null;
+  const skipPages = new Set(["/", "/channels", "/apps", "/account"]);
+  const OtherPage = !skipPages.has(currentPath) ? PAGES[currentPath] : null;
   return (
     <Layout currentPath={currentPath} onNavigate={navigate} agentName={agentName}>
       {/* Keep ChatPage always mounted so its WebSocket connection and pending
@@ -154,6 +159,9 @@ export function App() {
       <div className={currentPath === "/channels" ? "contents-toggle" : "hidden-toggle"}>
         <ChannelsPage />
       </div>
+      {currentPath === "/apps" && <AppsPage onNavigate={navigate} />}
+      {currentPath === "/browser-profiles" && <BrowserProfilesPage />}
+      {currentPath === "/account" && <AccountPage onNavigate={navigate} />}
       {OtherPage && <OtherPage />}
       <WhatsNewModal
         isOpen={showWhatsNew}

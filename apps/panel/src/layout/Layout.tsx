@@ -12,6 +12,11 @@ import { formatError } from "@easyclaw/core";
 import type { UpdateInfo, UpdateDownloadStatus } from "../api/index.js";
 import { ThemeToggle } from "../components/ThemeToggle.js";
 import { LangToggle } from "../components/LangToggle.js";
+import { UserAvatarButton } from "../components/UserAvatarButton.js";
+import { useAuth } from "../providers/AuthProvider.js";
+import { AuthModal } from "../components/AuthModal.js";
+
+const AUTH_REQUIRED_PATHS = new Set(["/browser-profiles"]);
 
 const SIDEBAR_MIN = 160;
 const SIDEBAR_MAX = 400;
@@ -109,7 +114,7 @@ const NAV_ICONS: Record<string, ReactNode> = {
       <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
     </svg>
   ),
-  "/stt": (
+  "/extras": (
     <svg
       width="18"
       height="18"
@@ -120,10 +125,7 @@ const NAV_ICONS: Record<string, ReactNode> = {
       strokeLinecap="round"
       strokeLinejoin="round"
     >
-      <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-      <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-      <line x1="12" y1="19" x2="12" y2="23" />
-      <line x1="8" y1="23" x2="16" y2="23" />
+      <path d="M19.439 7.85c-.049.322.059.648.289.878l1.568 1.568c.47.47.706 1.087.706 1.704s-.235 1.233-.706 1.704l-1.611 1.611a.98.98 0 0 1-.837.276c-.47-.07-.802-.48-.968-.925a2.501 2.501 0 1 0-3.214 3.214c.446.166.855.497.925.968a.979.979 0 0 1-.276.837l-1.61 1.611a2.404 2.404 0 0 1-1.705.707 2.402 2.402 0 0 1-1.704-.706l-1.568-1.568a1.026 1.026 0 0 0-.877-.29c-.493.074-.84.504-1.02.968a2.5 2.5 0 1 1-3.237-3.237c.464-.18.894-.527.967-1.02a1.026 1.026 0 0 0-.289-.877l-1.568-1.568A2.402 2.402 0 0 1 1.998 12c0-.617.236-1.234.706-1.704L4.315 8.685a.98.98 0 0 1 .837-.276c.47.07.802.48.968.925a2.501 2.501 0 1 0 3.214-3.214c-.446-.166-.855-.497-.925-.968a.979.979 0 0 1 .276-.837l1.611-1.611a2.404 2.404 0 0 1 1.704-.706c.617 0 1.234.236 1.704.706l1.568 1.568c.23.23.556.338.877.29.493-.074.84-.504 1.02-.968a2.5 2.5 0 1 1 3.237 3.237c-.464.18-.894.527-.968 1.02z" />
     </svg>
   ),
   "/usage": (
@@ -156,6 +158,22 @@ const NAV_ICONS: Record<string, ReactNode> = {
       <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
     </svg>
   ),
+  "/browser-profiles": (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <circle cx="12" cy="12" r="10" />
+      <line x1="2" y1="12" x2="22" y2="12" />
+      <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+  ),
   "/crons": (
     <svg
       width="18"
@@ -186,6 +204,37 @@ const NAV_ICONS: Record<string, ReactNode> = {
       <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
     </svg>
   ),
+  "/account": (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+      <circle cx="12" cy="7" r="4" />
+    </svg>
+  ),
+  "/auth": (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
+      <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+      <polyline points="10 17 15 12 10 7" />
+      <line x1="15" y1="12" x2="3" y2="12" />
+    </svg>
+  ),
 };
 
 export function Layout({
@@ -200,6 +249,9 @@ export function Layout({
   agentName?: string | null;
 }) {
   const { t } = useTranslation();
+  const { user } = useAuth();
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [pendingAuthPath, setPendingAuthPath] = useState<string | null>(null);
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [downloadStatus, setDownloadStatus] = useState<UpdateDownloadStatus>({
     status: "idle",
@@ -330,8 +382,9 @@ export function Layout({
     { path: "/channels", label: t("nav.channels") },
     { path: "/rules", label: t("nav.rules") },
     { path: "/permissions", label: t("nav.permissions") },
-    { path: "/stt", label: t("nav.stt") },
+    { path: "/extras", label: t("nav.extras") },
     { path: "/skills", label: t("nav.skills") },
+    { path: "/browser-profiles", label: t("nav.browserProfiles") },
     { path: "/crons", label: t("nav.crons") },
     // { path: "/apps", label: t("customerService.nav") },
     { path: "/usage", label: t("nav.usage") },
@@ -449,7 +502,14 @@ export function Layout({
                 <li key={item.path}>
                   <button
                     className={`nav-btn ${active ? "nav-active" : "nav-item"}`}
-                    onClick={() => onNavigate(item.path)}
+                    onClick={() => {
+                      if (AUTH_REQUIRED_PATHS.has(item.path) && !user) {
+                        setPendingAuthPath(item.path);
+                        setAuthModalOpen(true);
+                      } else {
+                        onNavigate(item.path);
+                      }
+                    }}
                     title={collapsed ? item.label : undefined}
                   >
                     <span className="nav-icon">{NAV_ICONS[item.path]}</span>
@@ -466,6 +526,7 @@ export function Layout({
           >
             <ThemeToggle />
             <LangToggle />
+            <UserAvatarButton onNavigate={onNavigate} />
           </div>
           {!collapsed && (
             <div
@@ -478,6 +539,11 @@ export function Layout({
           <main>{children}</main>
         </div>
       </div>
+      <AuthModal
+        isOpen={authModalOpen}
+        onClose={() => { setAuthModalOpen(false); setPendingAuthPath(null); }}
+        onSuccess={() => { if (pendingAuthPath) onNavigate(pendingAuthPath); }}
+      />
     </div>
   );
 }

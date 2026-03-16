@@ -133,12 +133,16 @@ export const handleChannelRoutes: RouteHandler = async (req, res, url, pathname,
 
     try {
       const probe = url.searchParams.get("probe") === "true";
-      const timeoutMs = 8000;
+      // Gateway probes channels serially; each channel probe can take up to 10s
+      // (feishu uses a hard-coded default, ignoring the passed timeoutMs).
+      // With N configured channels, worst case is N * 10s.
+      const probeTimeoutMs = 8000;
+      const clientTimeoutMs = probe ? 25000 : probeTimeoutMs + 2000;
 
       const snapshot = await rpcClient.request<ChannelsStatusSnapshot>(
         "channels.status",
-        { probe, timeoutMs },
-        timeoutMs + 2000
+        { probe, timeoutMs: probeTimeoutMs },
+        clientTimeoutMs
       );
 
       try {

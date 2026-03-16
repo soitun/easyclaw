@@ -3,16 +3,20 @@ import type { LLMProvider } from "@easyclaw/core";
 import { resolveModelConfig, LOCAL_PROVIDER_IDS, getProviderMeta, resolveGatewayPort } from "@easyclaw/core";
 import { buildExtraProviderConfigs, writeGatewayConfig } from "@easyclaw/gateway";
 import type { Storage } from "@easyclaw/storage";
+import type { SecretStore } from "@easyclaw/secrets";
 import { buildOwnerAllowFrom } from "./owner-sync.js";
+import type { AuthSessionManager } from "./auth-session.js";
 
 export interface GatewayConfigDeps {
   storage: Storage;
+  secretStore: SecretStore;
   locale: string;
   configPath: string;
   stateDir: string;
   extensionsDir: string;
   sttCliPath: string;
   filePermissionsPluginPath?: string;
+  authSession?: AuthSessionManager;
 }
 
 /**
@@ -20,7 +24,7 @@ export interface GatewayConfigDeps {
  * Returns closures that can be called without passing deps each time.
  */
 export function createGatewayConfigBuilder(deps: GatewayConfigDeps) {
-  const { storage, locale, configPath, stateDir, extensionsDir, sttCliPath, filePermissionsPluginPath } = deps;
+  const { storage, secretStore, locale, configPath, stateDir, extensionsDir, sttCliPath, filePermissionsPluginPath, authSession } = deps;
 
   function isGeminiOAuthActive(): boolean {
     return storage.providerKeys.getAll()
@@ -75,7 +79,21 @@ export function createGatewayConfigBuilder(deps: GatewayConfigDeps) {
     return overrides;
   }
 
-  function buildFullGatewayConfig(): Parameters<typeof writeGatewayConfig>[0] {
+  const WS_ENV_MAP: Record<string, string> = {
+    brave: "EASYCLAW_WS_BRAVE_APIKEY",
+    perplexity: "EASYCLAW_WS_PERPLEXITY_APIKEY",
+    grok: "EASYCLAW_WS_GROK_APIKEY",
+    gemini: "EASYCLAW_WS_GEMINI_APIKEY",
+    kimi: "EASYCLAW_WS_KIMI_APIKEY",
+  };
+  const EMB_ENV_MAP: Record<string, string> = {
+    openai: "EASYCLAW_EMB_OPENAI_APIKEY",
+    gemini: "EASYCLAW_EMB_GEMINI_APIKEY",
+    voyage: "EASYCLAW_EMB_VOYAGE_APIKEY",
+    mistral: "EASYCLAW_EMB_MISTRAL_APIKEY",
+  };
+
+  async function buildFullGatewayConfig(): Promise<Parameters<typeof writeGatewayConfig>[0]> {
     const activeKey = storage.providerKeys.getActive();
     const curProvider = activeKey?.provider as LLMProvider | undefined;
     const curRegion = storage.settings.get("region") ?? (locale === "zh" ? "cn" : "us");
@@ -89,8 +107,26 @@ export function createGatewayConfigBuilder(deps: GatewayConfigDeps) {
     const curSttEnabled = storage.settings.get("stt.enabled") === "true";
     const curSttProvider = (storage.settings.get("stt.provider") || "groq") as "groq" | "volcengine";
 
+    const curWebSearchEnabled = storage.settings.get("webSearch.enabled") === "true";
+    const curWebSearchProvider = (storage.settings.get("webSearch.provider") || "brave") as "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+
+    const curEmbeddingEnabled = storage.settings.get("embedding.enabled") === "true";
+    const curEmbeddingProvider = (storage.settings.get("embedding.provider") || "openai") as "openai" | "gemini" | "voyage" | "mistral" | "ollama";
+
     const curBrowserMode = (storage.settings.get("browser-mode") || "standalone") as "standalone" | "cdp";
     const curBrowserCdpPort = parseInt(storage.settings.get("browser-cdp-port") || "9222", 10);
+
+    // Only reference apiKey env var if key exists in keychain
+    const wsKeyExists = curWebSearchEnabled
+      ? !!(await secretStore.get(`websearch-${curWebSearchProvider}-apikey`))
+      : false;
+    const embKeyExists = curEmbeddingEnabled && curEmbeddingProvider !== "ollama"
+      ? !!(await secretStore.get(`embedding-${curEmbeddingProvider}-apikey`))
+      : false;
+
+    // Simplified: just pass static defaults. Per-run prompt addendum and
+    // tool gating are handled by the plugin's own hooks at runtime.
+    const browserProfilesEnabled = !!authSession?.getAccessToken();
 
     return {
       configPath,
@@ -109,7 +145,27 @@ export function createGatewayConfigBuilder(deps: GatewayConfigDeps) {
           "mobile-chat-channel",
           "easyclaw-event-bridge",
           "memory-core",
+          "browser-profiles-tools",
         ],
+        entries: {
+          "browser-profiles-tools": {
+            config: {
+              enabled: true,
+              capabilityContext: {
+                browserProfiles: {
+                  enabled: browserProfilesEnabled,
+                  disclosureLevel: "standard",
+                  allowDynamicDiscovery: true,
+                },
+              },
+            },
+          },
+          "easyclaw-tools": {
+            config: {
+              browserMode: curBrowserMode,
+            },
+          },
+        },
       },
       enableGeminiCliAuth: isGeminiOAuthActive(),
       skipBootstrap: false,
@@ -120,6 +176,16 @@ export function createGatewayConfigBuilder(deps: GatewayConfigDeps) {
         provider: curSttProvider,
         nodeBin: process.execPath,
         sttCliPath,
+      },
+      webSearch: {
+        enabled: curWebSearchEnabled,
+        provider: curWebSearchProvider,
+        apiKeyEnvVar: wsKeyExists ? WS_ENV_MAP[curWebSearchProvider] : undefined,
+      },
+      embedding: {
+        enabled: curEmbeddingEnabled,
+        provider: curEmbeddingProvider,
+        apiKeyEnvVar: embKeyExists ? EMB_ENV_MAP[curEmbeddingProvider] : undefined,
       },
       extraProviders: { ...buildExtraProviderConfigs(), ...buildCustomProviderOverrides() },
       localProviderOverrides: buildLocalProviderOverrides(),

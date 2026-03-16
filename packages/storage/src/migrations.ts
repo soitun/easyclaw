@@ -269,4 +269,28 @@ export const migrations: Migration[] = [
       ALTER TABLE provider_keys ADD COLUMN input_modalities_json TEXT DEFAULT NULL;
     `,
   },
+  {
+    id: 20,
+    name: "add_browser_profiles_table",
+    sql: `-- no-op: browser profiles moved to cloud backend`,
+  },
+  {
+    id: 21,
+    name: "drop_runtime_kind_and_browser_type_from_browser_profiles",
+    sql: `-- no-op: browser profiles moved to cloud backend`,
+  },
+  {
+    id: 22,
+    name: "add_tool_selections_table",
+    sql: `
+      CREATE TABLE IF NOT EXISTS tool_selections (
+        scope_type TEXT NOT NULL,
+        scope_key TEXT NOT NULL,
+        tool_id TEXT NOT NULL,
+        enabled INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (scope_type, scope_key, tool_id)
+      );
+    `,
+  },
 ];

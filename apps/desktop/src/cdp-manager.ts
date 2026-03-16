@@ -22,7 +22,9 @@ export interface CdpManagerDeps {
   };
   launcher: { reload(): Promise<void> };
   writeGatewayConfig: (options: WriteGatewayConfigOptions) => string;
-  buildFullGatewayConfig: () => WriteGatewayConfigOptions;
+  buildFullGatewayConfig: () => Promise<WriteGatewayConfigOptions>;
+  /** Called when CDP Chrome is confirmed accessible (probe succeeded). */
+  onCdpReady?: (port: number) => void;
 }
 
 /** Probe whether a CDP endpoint is accessible on the given port. */
@@ -161,6 +163,7 @@ export function createCdpManager(deps: CdpManagerDeps) {
     // 1. Probe preferred port — if CDP already accessible, reuse.
     if (await probeCdp(preferredPort)) {
       log.info(`CDP already reachable on port ${preferredPort}`);
+      deps.onCdpReady?.(preferredPort);
       return;
     }
 
@@ -262,7 +265,8 @@ export function createCdpManager(deps: CdpManagerDeps) {
       if (await probeCdp(actualPort)) {
         log.info(`Chrome CDP ready on port ${actualPort} (profile: ${profileDir})`);
         storage.settings.set("browser-cdp-port", String(actualPort));
-        writeGatewayConfig(buildFullGatewayConfig());
+        writeGatewayConfig(await buildFullGatewayConfig());
+        deps.onCdpReady?.(actualPort);
         return;
       }
     }
@@ -271,7 +275,7 @@ export function createCdpManager(deps: CdpManagerDeps) {
 
   async function handleBrowserChange(): Promise<void> {
     log.info("Browser settings changed, regenerating config");
-    writeGatewayConfig(buildFullGatewayConfig());
+    writeGatewayConfig(await buildFullGatewayConfig());
 
     const mode = storage.settings.get("browser-mode") || "standalone";
     if (mode === "cdp") {

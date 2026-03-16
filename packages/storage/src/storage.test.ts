@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createStorage, type Storage } from "./index.js";
+import { migrations } from "./migrations.js";
 
 let storage: Storage;
 
@@ -902,7 +903,7 @@ describe("Database", () => {
       .prepare("SELECT * FROM _migrations")
       .all() as Array<{ id: number; name: string; applied_at: string }>;
 
-    expect(rows).toHaveLength(19);
+    expect(rows).toHaveLength(migrations.length);
     expect(rows[0].id).toBe(1);
     expect(rows[0].name).toBe("initial_schema");
     expect(rows[1].id).toBe(2);
@@ -927,6 +928,8 @@ describe("Database", () => {
     expect(rows[16].name).toBe("add_pairing_id_to_mobile_pairings");
     expect(rows[17].id).toBe(18);
     expect(rows[17].name).toBe("add_status_to_mobile_pairings");
+    expect(rows[21].id).toBe(22);
+    expect(rows[21].name).toBe("add_tool_selections_table");
   });
 
   it("should not re-apply migrations on second open", () => {
@@ -938,7 +941,105 @@ describe("Database", () => {
       .prepare("SELECT * FROM _migrations")
       .all() as Array<{ id: number; name: string }>;
 
-    expect(rows).toHaveLength(19);
+    expect(rows).toHaveLength(migrations.length);
+  });
+});
+
+describe("ToolSelections", () => {
+  it("should save and retrieve selections for a scope", () => {
+    storage.toolSelections.setForScope("chat_session", "sess-1", [
+      { toolId: "tool-a", enabled: true },
+      { toolId: "tool-b", enabled: false },
+    ]);
+
+    const selections = storage.toolSelections.getForScope("chat_session", "sess-1");
+    expect(selections).toHaveLength(2);
+    expect(selections).toContainEqual({ toolId: "tool-a", enabled: true });
+    expect(selections).toContainEqual({ toolId: "tool-b", enabled: false });
+  });
+
+  it("should overwrite existing selections (setForScope replaces all)", () => {
+    storage.toolSelections.setForScope("chat_session", "sess-1", [
+      { toolId: "tool-a", enabled: true },
+      { toolId: "tool-b", enabled: true },
+    ]);
+
+    storage.toolSelections.setForScope("chat_session", "sess-1", [
+      { toolId: "tool-c", enabled: false },
+    ]);
+
+    const selections = storage.toolSelections.getForScope("chat_session", "sess-1");
+    expect(selections).toHaveLength(1);
+    expect(selections[0]).toEqual({ toolId: "tool-c", enabled: false });
+  });
+
+  it("should delete selections for a scope", () => {
+    storage.toolSelections.setForScope("cron_job", "cron-1", [
+      { toolId: "tool-a", enabled: true },
+    ]);
+
+    storage.toolSelections.deleteForScope("cron_job", "cron-1");
+
+    const selections = storage.toolSelections.getForScope("cron_job", "cron-1");
+    expect(selections).toHaveLength(0);
+  });
+
+  it("should isolate selections between different scopes", () => {
+    storage.toolSelections.setForScope("chat_session", "sess-1", [
+      { toolId: "tool-a", enabled: true },
+    ]);
+    storage.toolSelections.setForScope("cron_job", "cron-1", [
+      { toolId: "tool-b", enabled: false },
+    ]);
+    storage.toolSelections.setForScope("chat_session", "sess-2", [
+      { toolId: "tool-c", enabled: true },
+    ]);
+
+    const sess1 = storage.toolSelections.getForScope("chat_session", "sess-1");
+    expect(sess1).toHaveLength(1);
+    expect(sess1[0].toolId).toBe("tool-a");
+
+    const cron1 = storage.toolSelections.getForScope("cron_job", "cron-1");
+    expect(cron1).toHaveLength(1);
+    expect(cron1[0].toolId).toBe("tool-b");
+
+    const sess2 = storage.toolSelections.getForScope("chat_session", "sess-2");
+    expect(sess2).toHaveLength(1);
+    expect(sess2[0].toolId).toBe("tool-c");
+  });
+
+  it("should return empty array for non-existent scope", () => {
+    const selections = storage.toolSelections.getForScope("app_run", "nonexistent");
+    expect(selections).toHaveLength(0);
+  });
+
+  it("listScopes returns distinct scope pairs", () => {
+    storage.toolSelections.setForScope("chat_session", "s1", [
+      { toolId: "browser_profiles-list", enabled: true },
+    ]);
+    storage.toolSelections.setForScope("cron_job", "c1", [
+      { toolId: "browser_profiles-get", enabled: true },
+    ]);
+    storage.toolSelections.setForScope("chat_session", "s1", [
+      { toolId: "browser_profiles-list", enabled: true },
+      { toolId: "browser_profiles-manage", enabled: false },
+    ]);
+
+    const scopes = storage.toolSelections.listScopes();
+    expect(scopes).toHaveLength(2);
+    expect(scopes).toContainEqual({ scopeType: "chat_session", scopeKey: "s1" });
+    expect(scopes).toContainEqual({ scopeType: "cron_job", scopeKey: "c1" });
+  });
+
+  it("should handle setForScope with empty selections", () => {
+    storage.toolSelections.setForScope("chat_session", "sess-1", [
+      { toolId: "tool-a", enabled: true },
+    ]);
+
+    storage.toolSelections.setForScope("chat_session", "sess-1", []);
+
+    const selections = storage.toolSelections.getForScope("chat_session", "sess-1");
+    expect(selections).toHaveLength(0);
   });
 });
 

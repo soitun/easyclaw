@@ -342,6 +342,20 @@ export interface WriteGatewayConfigOptions {
     /** Absolute path to the Volcengine STT CLI script. */
     sttCliPath?: string;
   };
+  /** Web search configuration. */
+  webSearch?: {
+    enabled: boolean;
+    provider: "brave" | "perplexity" | "grok" | "gemini" | "kimi";
+    /** Env var name containing the API key. Written as ${VAR} in config for OpenClaw to resolve. */
+    apiKeyEnvVar?: string;
+  };
+  /** Embedding / memory search configuration. */
+  embedding?: {
+    enabled: boolean;
+    provider: "openai" | "gemini" | "voyage" | "mistral" | "ollama";
+    /** Env var name containing the API key. Written as ${VAR} in config for OpenClaw to resolve. */
+    apiKeyEnvVar?: string;
+  };
   /** Enable file permissions plugin. */
   enableFilePermissions?: boolean;
   /** Override path to the file permissions plugin .mjs entry file.
@@ -767,6 +781,73 @@ export function writeGatewayConfig(options: WriteGatewayConfigOptions): string {
     mergeAudioConfig(config, audioConfig);
     // Note: STT API keys are passed via environment variables (GROQ_API_KEY, etc.)
     // OpenClaw's audio providers automatically read from env vars.
+  }
+
+  // Web search configuration via OpenClaw's tools.web.search
+  if (options.webSearch !== undefined) {
+    const existingTools =
+      typeof config.tools === "object" && config.tools !== null
+        ? (config.tools as Record<string, unknown>)
+        : {};
+    const existingWeb =
+      typeof existingTools.web === "object" && existingTools.web !== null
+        ? (existingTools.web as Record<string, unknown>)
+        : {};
+
+    if (options.webSearch.enabled) {
+      const searchConfig: Record<string, unknown> = {
+        ...(typeof existingWeb.search === "object" && existingWeb.search !== null
+          ? (existingWeb.search as Record<string, unknown>)
+          : {}),
+        enabled: true,
+        provider: options.webSearch.provider,
+      };
+      if (options.webSearch.apiKeyEnvVar) {
+        searchConfig.apiKey = "${" + options.webSearch.apiKeyEnvVar + "}";
+      }
+      existingWeb.search = searchConfig;
+    } else {
+      existingWeb.search = { enabled: false };
+    }
+
+    config.tools = { ...existingTools, web: existingWeb };
+  }
+
+  // Embedding / memory search configuration via OpenClaw's agents.defaults.memorySearch
+  if (options.embedding !== undefined) {
+    const existingAgents =
+      typeof config.agents === "object" && config.agents !== null
+        ? (config.agents as Record<string, unknown>)
+        : {};
+    const existingDefaults =
+      typeof existingAgents.defaults === "object" && existingAgents.defaults !== null
+        ? (existingAgents.defaults as Record<string, unknown>)
+        : {};
+
+    if (options.embedding.enabled) {
+      const memoryConfig: Record<string, unknown> = {
+        ...(typeof existingDefaults.memorySearch === "object" && existingDefaults.memorySearch !== null
+          ? (existingDefaults.memorySearch as Record<string, unknown>)
+          : {}),
+        enabled: true,
+        provider: options.embedding.provider,
+      };
+      if (options.embedding.apiKeyEnvVar) {
+        const existingRemote =
+          typeof memoryConfig.remote === "object" && memoryConfig.remote !== null
+            ? (memoryConfig.remote as Record<string, unknown>)
+            : {};
+        memoryConfig.remote = {
+          ...existingRemote,
+          apiKey: "${" + options.embedding.apiKeyEnvVar + "}",
+        };
+      }
+      existingDefaults.memorySearch = memoryConfig;
+    } else {
+      existingDefaults.memorySearch = { enabled: false };
+    }
+
+    config.agents = { ...existingAgents, defaults: existingDefaults };
   }
 
   // Extra providers → models.providers (for providers not built into OpenClaw)

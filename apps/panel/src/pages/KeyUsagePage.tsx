@@ -1,9 +1,12 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
+import { useQuery } from "@apollo/client/react";
+import type { GQL } from "@easyclaw/core";
 import {
-  fetchKeyUsage, fetchActiveKeyUsage, fetchKeyUsageTimeseries, fetchPricing,
+  fetchKeyUsage, fetchActiveKeyUsage, fetchKeyUsageTimeseries,
   type KeyModelUsageSummary, type ActiveKeyInfo, type KeyUsageDailyBucket,
 } from "../api/index.js";
+import { PRICING_QUERY } from "../api/pricing-queries.js";
 import {
   type TimeRange, type PricingMap,
   buildPricingMap, buildGroups, ensureActiveKey, buildChartData,
@@ -24,6 +27,32 @@ export function KeyUsagePage() {
   const [timeRange, setTimeRange] = useState<TimeRange>("all");
   const [lastRefresh, setLastRefresh] = useState<Date>(new Date());
   const [pricingMap, setPricingMap] = useState<PricingMap>(new Map());
+  const [deviceId, setDeviceId] = useState<string | null>(null);
+
+  // Fetch deviceId once on mount (needed for pricing query variables)
+  useEffect(() => {
+    fetch("/api/status")
+      .then((res) => res.json())
+      .then((status) => setDeviceId(status.deviceId || "unknown"))
+      .catch(() => setDeviceId("unknown"));
+  }, []);
+
+  const pricingLang = navigator.language?.slice(0, 2) || "en";
+  const pricingPlatform = navigator.userAgent.includes("Mac") ? "darwin"
+    : navigator.userAgent.includes("Win") ? "win32" : "linux";
+
+  // Fetch pricing via Apollo (skipped until deviceId is known)
+  const { data: pricingData } = useQuery<{ pricing: GQL.ProviderPricing[] }>(PRICING_QUERY, {
+    variables: { deviceId: deviceId ?? "", platform: pricingPlatform, appVersion: "0.8.0", language: pricingLang },
+    skip: !deviceId,
+    fetchPolicy: "cache-first",
+  });
+
+  useEffect(() => {
+    if (pricingData?.pricing) {
+      setPricingMap(buildPricingMap(pricingData.pricing));
+    }
+  }, [pricingData]);
 
   /** Build time-range filter from current timeRange state. */
   const buildFilter = useCallback(() => {
@@ -90,21 +119,6 @@ export function KeyUsagePage() {
     }
   }, [loadTodayAndActive, loadHistorical]);
 
-  // Fetch pricing data once on mount
-  useEffect(() => {
-    (async () => {
-      try {
-        const statusRes = await fetch("/api/status");
-        const status = await statusRes.json();
-        const deviceId = status.deviceId || "unknown";
-        const lang = navigator.language?.slice(0, 2) || "en";
-        const platform = navigator.userAgent.includes("Mac") ? "darwin"
-          : navigator.userAgent.includes("Win") ? "win32" : "linux";
-        const data = await fetchPricing(deviceId, platform, "0.8.0", lang);
-        if (data) setPricingMap(buildPricingMap(data));
-      } catch { /* graceful degradation — use empty map */ }
-    })();
-  }, []);
 
   // Initial load
   useEffect(() => {

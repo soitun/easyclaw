@@ -6,6 +6,7 @@ import { restoreImages } from "../../lib/image-cache.js";
 import { fetchChatSessions, updateChatSession } from "../../api/chat-sessions.js";
 import type { ChatSessionMeta } from "../../api/chat-sessions.js";
 import { trackEvent } from "../../api/index.js";
+import { ensureToolContext } from "../../api/tool-registry.js";
 
 const REFRESH_DEBOUNCE = 2000;
 const MAX_CACHED_SESSIONS = 20;
@@ -220,6 +221,7 @@ export function useSessionManager(opts: UseSessionManagerOptions): UseSessionMan
     if (!connected) return;
     cancelledRef.current = false;
     fetchSessionsListRef.current();
+    ensureToolContext("chat_session", activeKeyRef.current).catch(err => console.warn("ensureToolContext failed:", err));
     return () => {
       cancelledRef.current = true;
       clearTimeout(refreshTimerRef.current);
@@ -299,6 +301,9 @@ export function useSessionManager(opts: UseSessionManagerOptions): UseSessionMan
       next.delete(key);
       return next;
     });
+
+    // Ensure tool context is pushed for the newly active session
+    ensureToolContext("chat_session", key).catch(err => console.warn("ensureToolContext failed:", err));
   }, [clientRef]);
 
   const createNewChat = useCallback(async () => {
@@ -342,6 +347,9 @@ export function useSessionManager(opts: UseSessionManagerOptions): UseSessionMan
       }
       return next;
     });
+
+    // Ensure tool context is pushed for the new session
+    ensureToolContext("chat_session", newKey).catch(err => console.warn("ensureToolContext failed:", err));
   }, []);
 
   const archiveSession = useCallback(async (key: string) => {

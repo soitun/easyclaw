@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
-import { fetchTelemetrySetting, updateTelemetrySetting, trackEvent, fetchAgentSettings, updateAgentSettings, fetchChatShowAgentEvents, updateChatShowAgentEvents, fetchChatPreserveToolEvents, updateChatPreserveToolEvents, fetchChatCollapseMessages, updateChatCollapseMessages, fetchBrowserMode, updateBrowserMode, fetchAutoLaunchSetting, updateAutoLaunchSetting, fetchOpenClawStateDir, updateOpenClawStateDir, resetOpenClawStateDir, fetchPrivacyMode, updatePrivacyMode } from "../api/index.js";
+import { fetchTelemetrySetting, updateTelemetrySetting, trackEvent, fetchAgentSettings, updateAgentSettings, fetchChatShowAgentEvents, updateChatShowAgentEvents, fetchChatPreserveToolEvents, updateChatPreserveToolEvents, fetchChatCollapseMessages, updateChatCollapseMessages, fetchBrowserMode, updateBrowserMode, fetchAutoLaunchSetting, updateAutoLaunchSetting, fetchOpenClawStateDir, updateOpenClawStateDir, resetOpenClawStateDir, fetchPrivacyMode, updatePrivacyMode, fetchSessionStateCdpEnabled, updateSessionStateCdpEnabled } from "../api/index.js";
 import type { OpenClawStateDirInfo } from "../api/index.js";
 import { Select } from "../components/Select.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
@@ -41,6 +41,7 @@ export function SettingsPage() {
   const [collapseMessages, setCollapseMessages] = useState(true);
   const [autoLaunchEnabled, setAutoLaunchEnabled] = useState(false);
   const [browserMode, setBrowserMode] = useState<"standalone" | "cdp">("standalone");
+  const [sessionStateCdpEnabled, setSessionStateCdpEnabled] = useState(true);
   const [cdpConfirmOpen, setCdpConfirmOpen] = useState(false);
   const [dataDirInfo, setDataDirInfo] = useState<OpenClawStateDirInfo | null>(null);
   const [dataDirRestartNeeded, setDataDirRestartNeeded] = useState(false);
@@ -48,21 +49,72 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [doctorStatus, setDoctorStatus] = useState<"idle" | "running" | "done" | "error">("idle");
+  const [doctorOutput, setDoctorOutput] = useState<string[]>([]);
+  const [doctorExitCode, setDoctorExitCode] = useState<number | null>(null);
+  const doctorOutputRef = useRef<HTMLPreElement>(null);
+  const doctorSseRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
     loadSettings();
   }, []);
 
+  useEffect(() => {
+    if (doctorOutputRef.current) {
+      doctorOutputRef.current.scrollTop = doctorOutputRef.current.scrollHeight;
+    }
+  }, [doctorOutput]);
+
+  useEffect(() => {
+    return () => {
+      doctorSseRef.current?.close();
+    };
+  }, []);
+
+  const runDoctor = useCallback((fix: boolean) => {
+    doctorSseRef.current?.close();
+    setDoctorStatus("running");
+    setDoctorOutput([]);
+    setDoctorExitCode(null);
+
+    const sse = new EventSource(`/api/doctor/run${fix ? "?fix=true" : ""}`);
+    doctorSseRef.current = sse;
+
+    sse.onmessage = (e) => {
+      const data = JSON.parse(e.data);
+      if (data.type === "output") {
+        setDoctorOutput(prev => [...prev, data.text]);
+      } else if (data.type === "done") {
+        setDoctorExitCode(data.exitCode);
+        setDoctorStatus(data.exitCode === 0 ? "done" : "error");
+        sse.close();
+        doctorSseRef.current = null;
+      } else if (data.type === "error") {
+        setDoctorOutput(prev => [...prev, `ERROR: ${data.message}`]);
+        setDoctorStatus("error");
+        sse.close();
+        doctorSseRef.current = null;
+      }
+    };
+
+    sse.onerror = () => {
+      setDoctorStatus("error");
+      sse.close();
+      doctorSseRef.current = null;
+    };
+  }, []);
+
   async function loadSettings() {
     try {
       setLoading(true);
-      const [enabled, agentSettings, chatEvents, toolEvents, collapse, curBrowserMode, autoLaunch, dirInfo, privacy] = await Promise.all([
+      const [enabled, agentSettings, chatEvents, toolEvents, collapse, curBrowserMode, cdpSessionState, autoLaunch, dirInfo, privacy] = await Promise.all([
         fetchTelemetrySetting(),
         fetchAgentSettings(),
         fetchChatShowAgentEvents(),
         fetchChatPreserveToolEvents(),
         fetchChatCollapseMessages(),
         fetchBrowserMode(),
+        fetchSessionStateCdpEnabled(),
         fetchAutoLaunchSetting(),
         fetchOpenClawStateDir(),
         fetchPrivacyMode(),
@@ -73,6 +125,7 @@ export function SettingsPage() {
       setPreserveToolEvents(toolEvents);
       setCollapseMessages(collapse);
       setBrowserMode(curBrowserMode);
+      setSessionStateCdpEnabled(cdpSessionState);
       setAutoLaunchEnabled(autoLaunch);
       setDataDirInfo(dirInfo);
       setPrivacyMode(privacy);
@@ -196,6 +249,22 @@ export function SettingsPage() {
     }
   }
 
+  async function handleToggleSessionStateCdp(enabled: boolean) {
+    const previous = sessionStateCdpEnabled;
+    setSessionStateCdpEnabled(enabled);
+    try {
+      setSaving(true);
+      setError(null);
+      await updateSessionStateCdpEnabled(enabled);
+      trackEvent("settings.session_state_cdp_toggled", { enabled });
+    } catch (err) {
+      setError(t("settings.browser.failedToSave") + String(err));
+      setSessionStateCdpEnabled(previous);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   function handleBrowserModeChange(value: string) {
     const newMode = value as "standalone" | "cdp";
     if (newMode === "cdp" && browserMode !== "cdp") {
@@ -313,6 +382,18 @@ export function SettingsPage() {
             {t("settings.browser.modeHint")}
           </div>
         </div>
+
+        {browserMode === "cdp" && (
+          <div className="settings-toggle-card">
+            <div className="settings-toggle-label">
+              <span>{t("settings.browser.sessionStateCdp")}</span>
+              <ToggleSwitch checked={sessionStateCdpEnabled} onChange={handleToggleSessionStateCdp} disabled={saving} />
+            </div>
+            <div className="form-hint">
+              {t("settings.browser.sessionStateCdpHint")}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Chat Settings Section */}
@@ -450,6 +531,52 @@ export function SettingsPage() {
             <li>{t("settings.telemetry.dontCollect.ruleText")}</li>
             <li>{t("settings.telemetry.dontCollect.personalInfo")}</li>
           </ul>
+        </div>
+      </div>
+
+      {/* Diagnostics Section */}
+      <div className="section-card">
+        <h3>{t("settings.diagnostics.title")}</h3>
+        <p className="text-secondary">
+          {t("settings.diagnostics.description")}
+        </p>
+
+        {doctorOutput.length > 0 && (
+          <pre ref={doctorOutputRef} className="doctor-output">
+            {doctorOutput.join("\n")}
+          </pre>
+        )}
+
+        <div className="doctor-actions">
+          <button
+            className="btn btn-primary"
+            onClick={() => runDoctor(false)}
+            disabled={doctorStatus === "running"}
+          >
+            {t("settings.diagnostics.runButton")}
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => runDoctor(true)}
+            disabled={doctorStatus === "running"}
+          >
+            {t("settings.diagnostics.fixButton")}
+          </button>
+          {doctorStatus === "running" && (
+            <span className="doctor-status">{t("settings.diagnostics.statusRunning")}</span>
+          )}
+          {doctorStatus === "done" && (
+            <span className="doctor-status doctor-status-success">
+              {t("settings.diagnostics.statusDone")}
+              {doctorExitCode !== null && ` (${t("settings.diagnostics.statusExitCode", { code: doctorExitCode })})`}
+            </span>
+          )}
+          {doctorStatus === "error" && (
+            <span className="doctor-status doctor-status-error">
+              {t("settings.diagnostics.statusError")}
+              {doctorExitCode !== null && ` (${t("settings.diagnostics.statusExitCode", { code: doctorExitCode })})`}
+            </span>
+          )}
         </div>
       </div>
 

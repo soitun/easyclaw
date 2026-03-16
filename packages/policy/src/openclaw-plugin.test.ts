@@ -4,7 +4,7 @@ import { createGuardEvaluator } from "./guard-evaluator.js";
 import type {
   PolicyProvider,
   GuardProvider,
-  AgentStartContext,
+  PromptBuildEvent,
   ToolCallContext,
 } from "./types.js";
 
@@ -30,73 +30,43 @@ function makeGuardContent(
   return JSON.stringify({ type: "guard", condition, action, reason });
 }
 
+const event: PromptBuildEvent = { prompt: "hello" };
+
 // ---------------------------------------------------------------------------
 // Policy Injector Tests (without guards)
 // ---------------------------------------------------------------------------
 
 describe("createPolicyInjector", () => {
-  it("returns original context when no policy is available", () => {
+  it("returns empty result when no policy is available", () => {
     const handler = createPolicyInjector(makePolicyProvider(""));
-    const ctx: AgentStartContext = { prependContext: "existing context" };
+    const result = handler(event);
 
-    const result = handler(ctx);
-
-    expect(result.prependContext).toBe("existing context");
+    expect(result.prependSystemContext).toBeUndefined();
   });
 
-  it("prepends policy block when policy exists", () => {
+  it("injects policy into prependSystemContext when policy exists", () => {
     const handler = createPolicyInjector(
       makePolicyProvider("Do not use sudo."),
     );
-    const ctx: AgentStartContext = { prependContext: "" };
+    const result = handler(event);
 
-    const result = handler(ctx);
-
-    expect(result.prependContext).toContain("--- EasyClaw Policy ---");
-    expect(result.prependContext).toContain("Do not use sudo.");
-    expect(result.prependContext).toContain("--- End Policy ---");
+    expect(result.prependSystemContext).toContain("Do not use sudo.");
   });
 
-  it("preserves existing prependContext after policy block", () => {
-    const handler = createPolicyInjector(
-      makePolicyProvider("Be careful with files."),
-    );
-    const ctx: AgentStartContext = { prependContext: "System instructions here" };
-
-    const result = handler(ctx);
-
-    expect(result.prependContext).toContain("--- EasyClaw Policy ---");
-    expect(result.prependContext).toContain("Be careful with files.");
-    expect(result.prependContext).toContain("--- End Policy ---");
-    expect(result.prependContext).toContain("System instructions here");
-    // Policy should come before existing context
-    const policyEnd = result.prependContext.indexOf("--- End Policy ---");
-    const existingStart = result.prependContext.indexOf(
-      "System instructions here",
-    );
-    expect(policyEnd).toBeLessThan(existingStart);
-  });
-
-  it("handles empty string policy by passing through", () => {
+  it("handles empty string policy by returning empty result", () => {
     const handler = createPolicyInjector(makePolicyProvider(""));
-    const ctx: AgentStartContext = { prependContext: "" };
+    const result = handler(event);
 
-    const result = handler(ctx);
-
-    expect(result.prependContext).toBe("");
+    expect(result.prependSystemContext).toBeUndefined();
   });
 
-  it("handles empty prependContext with policy present", () => {
+  it("handles policy with content", () => {
     const handler = createPolicyInjector(
       makePolicyProvider("Rule: always explain."),
     );
-    const ctx: AgentStartContext = { prependContext: "" };
+    const result = handler(event);
 
-    const result = handler(ctx);
-
-    expect(result.prependContext).toContain("Rule: always explain.");
-    // Should not have a trailing newline + empty context appended
-    expect(result.prependContext).not.toContain("\n\n\n");
+    expect(result.prependSystemContext).toContain("Rule: always explain.");
   });
 });
 
@@ -105,7 +75,7 @@ describe("createPolicyInjector", () => {
 // ---------------------------------------------------------------------------
 
 describe("createPolicyInjector with guards", () => {
-  it("injects guard directives into prependContext", () => {
+  it("injects guard directives into prependSystemContext", () => {
     const handler = createPolicyInjector(
       makePolicyProvider(""),
       makeGuardProvider([
@@ -120,15 +90,11 @@ describe("createPolicyInjector with guards", () => {
         },
       ]),
     );
-    const ctx: AgentStartContext = { prependContext: "" };
+    const result = handler(event);
 
-    const result = handler(ctx);
-
-    expect(result.prependContext).toContain("--- EasyClaw Guards (MUST enforce) ---");
-    expect(result.prependContext).toContain("[BLOCK]");
-    expect(result.prependContext).toContain("Current time is after 22:00");
-    expect(result.prependContext).toContain("Don't disturb after 10pm");
-    expect(result.prependContext).toContain("--- End Guards ---");
+    expect(result.prependSystemContext).toContain("[BLOCK]");
+    expect(result.prependSystemContext).toContain("Current time is after 22:00");
+    expect(result.prependSystemContext).toContain("Don't disturb after 10pm");
   });
 
   it("injects both policy and guards in correct order", () => {
@@ -142,17 +108,13 @@ describe("createPolicyInjector with guards", () => {
         },
       ]),
     );
-    const ctx: AgentStartContext = { prependContext: "existing" };
+    const result = handler(event);
 
-    const result = handler(ctx);
-
-    // Policy comes first
-    const policyIdx = result.prependContext.indexOf("--- EasyClaw Policy ---");
-    const guardsIdx = result.prependContext.indexOf("--- EasyClaw Guards");
-    const existingIdx = result.prependContext.indexOf("existing");
+    // Policy comes first, then guards
+    const policyIdx = result.prependSystemContext!.indexOf("Be polite.");
+    const guardsIdx = result.prependSystemContext!.indexOf("[BLOCK]");
 
     expect(policyIdx).toBeLessThan(guardsIdx);
-    expect(guardsIdx).toBeLessThan(existingIdx);
   });
 
   it("formats guard with different condition and reason", () => {
@@ -170,10 +132,9 @@ describe("createPolicyInjector with guards", () => {
         },
       ]),
     );
-    const result = handler({ prependContext: "" });
+    const result = handler(event);
 
-    // Should show both condition and reason separated by —
-    expect(result.prependContext).toContain("[BLOCK] Time is after 22:00 — Quiet hours!");
+    expect(result.prependSystemContext).toContain("[BLOCK] Time is after 22:00 — Quiet hours!");
   });
 
   it("formats guard with same condition and reason without duplication", () => {
@@ -191,11 +152,10 @@ describe("createPolicyInjector with guards", () => {
         },
       ]),
     );
-    const result = handler({ prependContext: "" });
+    const result = handler(event);
 
-    // Should NOT duplicate the text
-    expect(result.prependContext).toContain("[BLOCK] Block all file deletions after 6pm");
-    expect(result.prependContext).not.toContain("—");
+    expect(result.prependSystemContext).toContain("[BLOCK] Block all file deletions after 6pm");
+    expect(result.prependSystemContext).not.toContain("—");
   });
 
   it("injects multiple guards as separate lines", () => {
@@ -214,20 +174,20 @@ describe("createPolicyInjector with guards", () => {
         },
       ]),
     );
-    const result = handler({ prependContext: "" });
+    const result = handler(event);
 
-    expect(result.prependContext).toContain("[BLOCK] tool:write_file — No writing");
-    expect(result.prependContext).toContain("[BLOCK] path:/etc/* — System protected");
+    expect(result.prependSystemContext).toContain("[BLOCK] tool:write_file — No writing");
+    expect(result.prependSystemContext).toContain("[BLOCK] path:/etc/* — System protected");
   });
 
-  it("passes through when no policy and no guards", () => {
+  it("returns empty result when no policy and no guards", () => {
     const handler = createPolicyInjector(
       makePolicyProvider(""),
       makeGuardProvider([]),
     );
-    const result = handler({ prependContext: "original" });
+    const result = handler(event);
 
-    expect(result.prependContext).toBe("original");
+    expect(result.prependSystemContext).toBeUndefined();
   });
 
   it("injects guards even when no policy exists", () => {
@@ -241,11 +201,10 @@ describe("createPolicyInjector with guards", () => {
         },
       ]),
     );
-    const result = handler({ prependContext: "" });
+    const result = handler(event);
 
-    expect(result.prependContext).not.toContain("--- EasyClaw Policy ---");
-    expect(result.prependContext).toContain("--- EasyClaw Guards");
-    expect(result.prependContext).toContain("[BLOCK] tool:* — All blocked");
+    expect(result.prependSystemContext).not.toContain("Policy");
+    expect(result.prependSystemContext).toContain("[BLOCK] tool:* — All blocked");
   });
 
   it("skips malformed guard content gracefully", () => {
@@ -260,14 +219,13 @@ describe("createPolicyInjector with guards", () => {
         },
       ]),
     );
-    const result = handler({ prependContext: "" });
+    const result = handler(event);
 
-    // Malformed guard skipped, valid one injected
-    expect(result.prependContext).toContain("[BLOCK]");
-    expect(result.prependContext).toContain("No exec");
+    expect(result.prependSystemContext).toContain("[BLOCK]");
+    expect(result.prependSystemContext).toContain("No exec");
   });
 
-  it("skips guard with no condition and no reason", () => {
+  it("returns empty result when guard has no condition and no reason", () => {
     const handler = createPolicyInjector(
       makePolicyProvider(""),
       makeGuardProvider([
@@ -278,10 +236,9 @@ describe("createPolicyInjector with guards", () => {
         },
       ]),
     );
-    const result = handler({ prependContext: "" });
+    const result = handler(event);
 
-    // No guards to inject → pass through
-    expect(result.prependContext).toBe("");
+    expect(result.prependSystemContext).toBeUndefined();
   });
 
   it("uppercases the action in the directive", () => {
@@ -295,17 +252,17 @@ describe("createPolicyInjector with guards", () => {
         },
       ]),
     );
-    const result = handler({ prependContext: "" });
+    const result = handler(event);
 
-    expect(result.prependContext).toContain("[CONFIRM]");
+    expect(result.prependSystemContext).toContain("[CONFIRM]");
   });
 
   it("works without guardProvider (backward compatible)", () => {
     const handler = createPolicyInjector(makePolicyProvider("A policy."));
-    const result = handler({ prependContext: "" });
+    const result = handler(event);
 
-    expect(result.prependContext).toContain("A policy.");
-    expect(result.prependContext).not.toContain("Guards");
+    expect(result.prependSystemContext).toContain("A policy.");
+    expect(result.prependSystemContext).not.toContain("Guards");
   });
 });
 
@@ -470,7 +427,6 @@ describe("createGuardEvaluator", () => {
 
     const result = handler(ctx);
 
-    // Should skip malformed guards and still process the valid one
     expect(result.block).toBe(true);
     expect(result.blockReason).toBe("Valid guard after malformed ones");
   });

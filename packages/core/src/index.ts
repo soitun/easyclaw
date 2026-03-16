@@ -40,6 +40,35 @@ export type {
   CSBindingResolvedFrame,
   CSWSFrame,
   PlatformAdapter,
+  BrowserProfileId,
+  BrowserProfileStatus,
+  BrowserProfileProxyPolicy,
+  BrowserProfileVisibility,
+  BrowserProfileEntitlement,
+  BrowserProfileSummary,
+  BrowserProfileDetail,
+  BrowserProfileResolveResult,
+  BrowserProfilesDisclosureLevel,
+  BrowserProfilesCapabilityBinding,
+  AgentRunCapabilityContext,
+  BrowserProfilesFilterInput,
+  CreateBrowserProfileInput,
+  UpdateBrowserProfileInput,
+  BrowserProfileProxyTestResult,
+  BrowserProfilesToolAction,
+  BrowserProfilesToolRequest,
+  BrowserProfilesToolResponse,
+  BrowserProfileSessionStateMode,
+  BrowserProfileSessionStateStorage,
+  BrowserProfileSessionStatePolicy,
+  BrowserProfileSessionSnapshotMeta,
+  BrowserProfileRuntimeStateSummary,
+  SessionStateRuntimeTarget,
+  ToolScopeType,
+  ToolSelection,
+  ToolSelectionScope,
+  ScopedToolConfig,
+  AgentRunToolContext,
 } from "./types/index.js";
 
 export type {
@@ -48,9 +77,20 @@ export type {
   RelayAuthRequest,
   RelayAuthResponse,
   WsEnvelope,
+  MobileGraphQLError,
+  MobileGraphQLRequest,
+  MobileGraphQLResponse,
+  RegisterPairingInput,
+  RegisterPairingResult,
 } from "./types/index.js";
 
-export { easyClawConfigSchema, DEFAULT_STT_SETTINGS, STT_SETTINGS_KEYS, STT_SECRET_KEYS } from "./types/index.js";
+export {
+  easyClawConfigSchema,
+  DEFAULT_STT_SETTINGS,
+  STT_SETTINGS_KEYS,
+  STT_SECRET_KEYS,
+  DEFAULT_SESSION_STATE_POLICY,
+} from "./types/index.js";
 
 export type { ChannelType } from "./channels.js";
 export { ALL_CHANNELS, BUILTIN_CHANNELS, CUSTOM_CHANNELS } from "./channels.js";
@@ -98,6 +138,8 @@ export {
 } from "./ports.js";
 
 export { RELAY_MAX_CLIENT_BYTES, RELAY_MAX_CLIENT_MB, RELAY_MAX_PAYLOAD_BYTES } from "./relay.js";
+
+export * as GQL from "./generated/graphql.js";
 
 export { stripReasoningTagsFromText } from "./generated/reasoning-tags.js";
 export type { ReasoningTagMode, ReasoningTagTrim } from "./generated/reasoning-tags.js";

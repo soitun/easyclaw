@@ -4,6 +4,8 @@ import QRCode from "qrcode";
 import {
     generateMobilePairingCode,
     getMobilePairingStatus,
+    waitForPairing,
+    registerPairing,
 } from "../api/mobile-chat.js";
 import { fetchPrivacyMode } from "../api/settings.js";
 import { Modal } from "./Modal.js";
@@ -29,12 +31,13 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
     const [expired, setExpired] = useState(false);
     const [remainingSeconds, setRemainingSeconds] = useState(0);
 
-    const pollIntervalRef = useRef<number | null>(null);
+    const pollAbortRef = useRef(false);
     const baseCountRef = useRef(0);
     const expiryTimerRef = useRef<number | null>(null);
     const countdownRef = useRef<number | null>(null);
     const onBindingSuccessRef = useRef(onBindingSuccess);
     onBindingSuccessRef.current = onBindingSuccess;
+    const desktopDeviceIdRef = useRef<string | null>(null);
 
     // Load privacy mode setting and listen for changes
     useEffect(() => {
@@ -69,8 +72,15 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
             setLoading(true);
             setExpired(false);
             clearTimers();
+            pollAbortRef.current = true; // cancel any in-flight waitForPairing
 
-            const res = await generateMobilePairingCode();
+            const deviceId = desktopDeviceIdRef.current;
+            if (!deviceId) {
+                setError("Desktop device ID not available");
+                return;
+            }
+
+            const res = await generateMobilePairingCode(deviceId);
             setPairingCode(res.code || null);
 
             if (res.code) {
@@ -82,7 +92,7 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
                 });
                 setQrDataUrl(qrData);
 
-                const ttl = res.ttlMs ?? DEFAULT_TTL_MS;
+                const ttl = DEFAULT_TTL_MS;
                 const ttlSeconds = Math.round(ttl / 1000);
                 setRemainingSeconds(ttlSeconds);
                 countdownRef.current = window.setInterval(() => {
@@ -96,7 +106,39 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
                 }, 1000);
                 expiryTimerRef.current = window.setTimeout(() => {
                     setExpired(true);
+                    pollAbortRef.current = true; // stop long-poll on expiry
                 }, ttl);
+
+                // Start cloud long-poll for pairing completion
+                pollAbortRef.current = false;
+                const code = res.code;
+                (async () => {
+                    while (!pollAbortRef.current) {
+                        try {
+                            const result = await waitForPairing(code);
+                            if (pollAbortRef.current) break;
+                            if (result.paired && result.accessToken && result.relayUrl) {
+                                // Push the result to desktop for local side-effects
+                                await registerPairing({
+                                    pairingId: result.pairingId,
+                                    desktopDeviceId: result.desktopDeviceId || deviceId,
+                                    accessToken: result.accessToken,
+                                    relayUrl: result.relayUrl,
+                                    mobileDeviceId: result.mobileDeviceId,
+                                });
+                                if (!pollAbortRef.current) {
+                                    onBindingSuccessRef.current();
+                                }
+                                break;
+                            }
+                            // If not paired and no reason (timeout), retry
+                            if (result.reason) break; // e.g. "expired"
+                        } catch {
+                            // Network error — stop polling
+                            break;
+                        }
+                    }
+                })();
             } else {
                 setQrDataUrl(null);
             }
@@ -110,13 +152,10 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
     const generateCodeRef = useRef(generateCode);
     generateCodeRef.current = generateCode;
 
-    // Generate pairing code and start polling when modal opens
+    // Fetch desktopDeviceId and generate pairing code when modal opens
     useEffect(() => {
         if (!isOpen) {
-            if (pollIntervalRef.current) {
-                clearInterval(pollIntervalRef.current);
-                pollIntervalRef.current = null;
-            }
+            pollAbortRef.current = true;
             return;
         }
 
@@ -129,30 +168,15 @@ export function MobileBindingModal({ isOpen, onClose, onBindingSuccess }: Mobile
                 if (!cancelled) {
                     setExistingCount(count);
                     baseCountRef.current = count;
+                    desktopDeviceIdRef.current = res.desktopDeviceId || null;
                 }
             } catch { /* ignore */ }
             if (!cancelled) await generateCodeRef.current();
         })();
 
-        pollIntervalRef.current = window.setInterval(async () => {
-            try {
-                const res = await getMobilePairingStatus();
-                const count = res.pairings?.length ?? 0;
-                setExistingCount(count);
-                if (count > baseCountRef.current && pollIntervalRef.current) {
-                    clearInterval(pollIntervalRef.current);
-                    pollIntervalRef.current = null;
-                    onBindingSuccessRef.current();
-                }
-            } catch { /* ignore */ }
-        }, 3000);
-
         return () => {
             cancelled = true;
-            if (pollIntervalRef.current) {
-                clearInterval(pollIntervalRef.current);
-                pollIntervalRef.current = null;
-            }
+            pollAbortRef.current = true;
             clearTimers();
         };
     }, [isOpen, clearTimers]);

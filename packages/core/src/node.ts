@@ -14,6 +14,7 @@ export {
   resolveMediaDir,
   resolveCdpDataDir,
   resolveUpdateMarkerPath,
+  resolveHeartbeatPath,
   resolveProxyRouterConfigPath,
   resolveUserSkillsDir,
 } from "./paths.js";

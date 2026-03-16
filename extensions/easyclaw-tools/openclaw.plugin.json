@@ -5,6 +5,12 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
-    "properties": {}
+    "properties": {
+      "browserMode": {
+        "type": "string",
+        "enum": ["standalone", "cdp"],
+        "description": "Current browser mode configured in EasyClaw settings"
+      }
+    }
   }
 }

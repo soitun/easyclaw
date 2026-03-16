@@ -98,10 +98,6 @@ export function cleanMessageText(text: string): string {
   // Strip agent framework tool-result summaries (e.g. "System: [2026-02-24 16:16:41 PST] Exec completed ...")
   cleaned = cleaned.replace(/^System: \[\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})? [A-Z]{2,5}\].*$/gm, "").trim();
 
-  // Strip EasyClaw prependContext blocks (runtime env, policy, guards)
-  // These are injected by plugins for the agent but not meant for the user.
-  cleaned = cleaned.replace(/---\s+EasyClaw[\s\S]*?---\s+End\s+\w[\w\s]*---/g, "").trim();
-
   // Strip queue-collected message wrapper produced by OpenClaw's drain.ts
   // when messages arrive while the agent is busy processing another run.
   // Format: "[Queued messages while agent was busy]\n\n---\nQueued #1\n\n<actual message>"

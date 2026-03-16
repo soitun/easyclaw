@@ -175,7 +175,7 @@ let vendorCatalogCache: Record<string, CatalogModelEntry[]> | null = null;
  * Read the vendor model catalog — a pre-extracted JSON file containing { id, name }
  * per provider from the pi-ai MODELS constant.
  *
- * In production builds, `bundle-vendor-deps.cjs` extracts this data at build time
+ * In production builds, `create-runtime-archive.cjs` extracts this data at build time
  * into `dist/vendor-models.json`, eliminating the need to ship the full pi-ai
  * package. In dev mode (no JSON file yet), falls back to dynamically importing
  * the original `models.generated.js`.

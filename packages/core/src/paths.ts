@@ -71,6 +71,13 @@ export function resolveProxyRouterConfigPath(
   return join(resolveOpenClawStateDir(env), "proxy-router.json");
 }
 
+/** Resolve the heartbeat file path used for single-instance stale detection. */
+export function resolveHeartbeatPath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return join(resolveEasyClawHome(env), "heartbeat.json");
+}
+
 /** Resolve the user-installed skills directory. */
 export function resolveUserSkillsDir(
   env: Record<string, string | undefined> = process.env,

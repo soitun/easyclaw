@@ -1,5 +1,4 @@
-import { getGraphqlUrl } from "@easyclaw/core";
-import { fetchJson, cachedFetch } from "./client.js";
+import { fetchJson } from "./client.js";
 
 // --- Usage ---
 
@@ -109,79 +108,3 @@ export async function fetchKeyUsageTimeseries(filter?: {
   return fetchJson<KeyUsageDailyBucket[]>("/key-usage/timeseries" + (query ? "?" + query : ""));
 }
 
-// --- Pricing (cloud backend) ---
-
-export interface ModelPricing {
-  modelId: string;
-  displayName: string;
-  inputPricePerMillion: string;
-  outputPricePerMillion: string;
-  note?: string;
-}
-
-export interface PlanDetail {
-  modelName: string;
-  volume: string;
-}
-
-export interface Plan {
-  planName: string;
-  price: string;
-  currency: string;
-  planDetail: PlanDetail[];
-}
-
-export interface ProviderSubscription {
-  id: string;
-  label: string;
-  pricingUrl: string;
-  plans: Plan[];
-}
-
-export interface ProviderPricing {
-  provider: string;
-  currency: string;
-  pricingUrl: string;
-  models: ModelPricing[];
-  subscriptions?: ProviderSubscription[];
-}
-
-function getPricingApiUrl(language: string): string {
-  return getGraphqlUrl(language);
-}
-
-/**
- * Fetch model pricing data from the cloud backend.
- * Returns null if the server is unreachable (graceful degradation).
- */
-export async function fetchPricing(
-  deviceId: string,
-  platform: string,
-  appVersion: string,
-  language: string,
-): Promise<ProviderPricing[] | null> {
-  return cachedFetch("pricing", async () => {
-    try {
-      const res = await fetch(getPricingApiUrl(language), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: `query($deviceId: String!, $platform: String!, $appVersion: String!, $language: String!) {
-            pricing(deviceId: $deviceId, platform: $platform, appVersion: $appVersion, language: $language) {
-              provider currency pricingUrl
-              models { modelId displayName inputPricePerMillion outputPricePerMillion note }
-              subscriptions { id label pricingUrl plans { planName price currency planDetail { modelName volume } } }
-            }
-          }`,
-          variables: { deviceId, platform, appVersion, language },
-        }),
-        signal: AbortSignal.timeout(8_000),
-      });
-      if (!res.ok) return null;
-      const json = await res.json();
-      return json.data?.pricing ?? null;
-    } catch {
-      return null;
-    }
-  }, 14_400_000); // 4h — pricing rarely changes
-}

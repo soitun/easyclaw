@@ -1,7 +1,7 @@
 import { createLogger } from "@easyclaw/logger";
 import type {
-  AgentStartContext,
-  AgentStartResult,
+  PromptBuildEvent,
+  PromptBuildResult,
   GuardProvider,
   PolicyProvider,
 } from "./types.js";
@@ -34,15 +34,15 @@ function formatGuardDirective(content: string): string | null {
 }
 
 /**
- * Creates a before_agent_start handler that injects the compiled policy view
- * and active guard directives as prependContext. Both blocks are wrapped with
- * delimiters and placed before any existing prependContext.
+ * Creates a before_prompt_build handler that injects the compiled policy view
+ * and active guard directives as prependSystemContext (system prompt layer,
+ * invisible to the user chat UI).
  */
 export function createPolicyInjector(
   provider: PolicyProvider,
   guardProvider?: GuardProvider,
-): (ctx: AgentStartContext) => AgentStartResult {
-  return function handleAgentStart(ctx: AgentStartContext): AgentStartResult {
+): (event: PromptBuildEvent) => PromptBuildResult {
+  return function handlePromptBuild(_event: PromptBuildEvent): PromptBuildResult {
     const policyView = provider.getCompiledPolicyView();
     const guards = guardProvider?.getActiveGuards() ?? [];
 
@@ -62,32 +62,23 @@ export function createPolicyInjector(
 
     if (!hasPolicy && !hasGuards) {
       log.debug("No policies or guards available; passing through context");
-      return { prependContext: ctx.prependContext };
+      return {};
     }
 
     const blocks: string[] = [];
 
     if (hasPolicy) {
-      log.info("Injecting compiled policy view into prependContext");
-      blocks.push(
-        "--- EasyClaw Policy ---\n" + policyView + "\n--- End Policy ---",
-      );
+      log.info("Injecting compiled policy view into system prompt");
+      blocks.push(policyView);
     }
 
     if (hasGuards) {
-      log.info(`Injecting ${guardDirectives.length} guard directive(s) into prependContext`);
-      blocks.push(
-        "--- EasyClaw Guards (MUST enforce) ---\n" +
-          guardDirectives.join("\n") +
-          "\n--- End Guards ---",
-      );
+      log.info(`Injecting ${guardDirectives.length} guard directive(s) into system prompt`);
+      blocks.push(guardDirectives.join("\n"));
     }
 
-    const injected = blocks.join("\n") + "\n";
-
     return {
-      prependContext:
-        injected + (ctx.prependContext ? "\n" + ctx.prependContext : ""),
+      prependSystemContext: blocks.join("\n\n"),
     };
   };
 }

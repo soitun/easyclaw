@@ -34,6 +34,8 @@ beforeAll(async () => {
     panelDistDir: "/tmp/nonexistent-panel-dist", // no static files needed for API tests
     storage,
     secretStore: { get: async () => null, set: async () => {}, delete: async () => {} } as any,
+    vendorDir: "/tmp/nonexistent-vendor",
+    nodeBin: process.execPath,
     onRuleChange: (action, ruleId) => {
       ruleChanges.push({ action, ruleId });
     },
@@ -63,6 +65,41 @@ describe("panel-server API", () => {
       expect(body.status).toBe("ok");
       expect(body.ruleCount).toBe(0);
       expect(body.artifactCount).toBe(0);
+    });
+  });
+
+  describe("Browser Profiles REST endpoints", () => {
+    it("POST /api/browser-profiles/test-proxy returns 400 when id is missing", async () => {
+      const { status, body } = await fetchJson<{ error: string }>(
+        "/api/browser-profiles/test-proxy",
+        {
+          method: "POST",
+          body: JSON.stringify({}),
+        },
+      );
+      expect(status).toBe(400);
+      expect(body.error).toContain("Missing id");
+    });
+
+    it("POST /api/browser-profiles/test-proxy returns 401 when not authenticated", async () => {
+      const { status, body } = await fetchJson<{ error: string }>(
+        "/api/browser-profiles/test-proxy",
+        {
+          method: "POST",
+          body: JSON.stringify({ id: "some-profile-id" }),
+        },
+      );
+      expect(status).toBe(401);
+      expect(body.error).toContain("Not authenticated");
+    });
+
+    it("DELETE /api/browser-profiles/:id/data returns ok for non-existent profile", async () => {
+      const { status, body } = await fetchJson<{ ok: boolean }>(
+        "/api/browser-profiles/nonexistent-id/data",
+        { method: "DELETE" },
+      );
+      expect(status).toBe(200);
+      expect(body.ok).toBe(true);
     });
   });
 

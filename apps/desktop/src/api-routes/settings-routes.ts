@@ -9,7 +9,7 @@ import { sendJson, parseBody } from "./route-utils.js";
 const log = createLogger("panel-server");
 
 export const handleSettingsRoutes: RouteHandler = async (req, res, url, pathname, ctx) => {
-  const { storage, secretStore, onProviderChange, onSttChange, onPermissionsChange, onBrowserChange, onAutoLaunchChange, onTelemetryTrack, sttManager, onOpenFileDialog, getUpdateResult, getGatewayInfo, deviceId } = ctx;
+  const { storage, secretStore, onProviderChange, onSttChange, onExtrasChange, onPermissionsChange, onBrowserChange, onAutoLaunchChange, onTelemetryTrack, sttManager, onOpenFileDialog, getUpdateResult, getGatewayInfo, deviceId } = ctx;
 
   // --- Status ---
   if (pathname === "/api/status" && req.method === "GET") {
@@ -263,6 +263,78 @@ export const handleSettingsRoutes: RouteHandler = async (req, res, url, pathname
       sendJson(res, 500, { error: String(err) });
     }
     return true;
+  }
+
+  // --- Extras Credentials Status (Web Search & Embedding) ---
+  if (pathname === "/api/extras/credentials" && req.method === "GET") {
+    try {
+      const webSearchKeys: Record<string, boolean> = {};
+      for (const p of ["brave", "perplexity", "grok", "gemini", "kimi"]) {
+        webSearchKeys[p] = !!(await secretStore.get(`websearch-${p}-apikey`));
+      }
+
+      const embeddingKeys: Record<string, boolean> = {};
+      for (const p of ["openai", "gemini", "voyage", "mistral"]) {
+        embeddingKeys[p] = !!(await secretStore.get(`embedding-${p}-apikey`));
+      }
+
+      sendJson(res, 200, {
+        webSearch: webSearchKeys,
+        embedding: embeddingKeys,
+      });
+      return true;
+    } catch (err) {
+      log.error("Failed to check extras credentials", err);
+      sendJson(res, 500, { error: "Failed to check credentials" });
+      return true;
+    }
+  }
+
+  // --- Extras Credentials Save (Web Search & Embedding) ---
+  if (pathname === "/api/extras/credentials" && req.method === "PUT") {
+    const body = (await parseBody(req)) as {
+      type?: string;
+      provider?: string;
+      apiKey?: string;
+    };
+
+    if (!body.type || !body.provider || !body.apiKey) {
+      sendJson(res, 400, { error: "Missing type, provider, or apiKey" });
+      return true;
+    }
+
+    try {
+      const validWebSearchProviders = ["brave", "perplexity", "grok", "gemini", "kimi"];
+      const validEmbeddingProviders = ["openai", "gemini", "voyage", "mistral"];
+
+      let secretKey: string;
+      if (body.type === "webSearch") {
+        if (!validWebSearchProviders.includes(body.provider)) {
+          sendJson(res, 400, { error: "Unknown web search provider" });
+          return true;
+        }
+        secretKey = `websearch-${body.provider}-apikey`;
+      } else if (body.type === "embedding") {
+        if (!validEmbeddingProviders.includes(body.provider)) {
+          sendJson(res, 400, { error: "Unknown embedding provider" });
+          return true;
+        }
+        secretKey = `embedding-${body.provider}-apikey`;
+      } else {
+        sendJson(res, 400, { error: "Unknown type" });
+        return true;
+      }
+
+      await secretStore.set(secretKey, body.apiKey);
+      sendJson(res, 200, { ok: true });
+      onExtrasChange?.();
+      onTelemetryTrack?.("extras.configured", { type: body.type, provider: body.provider });
+      return true;
+    } catch (err) {
+      log.error("Failed to save extras credentials", err);
+      sendJson(res, 500, { error: "Failed to save credentials" });
+      return true;
+    }
   }
 
   // --- STT Credentials Status ---

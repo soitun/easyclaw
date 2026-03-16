@@ -175,6 +175,16 @@ export async function updateBrowserMode(mode: "standalone" | "cdp"): Promise<voi
   invalidateCache("settings");
 }
 
+export async function fetchSessionStateCdpEnabled(): Promise<boolean> {
+  const settings = await fetchSettings();
+  return settings["session-state-cdp-enabled"] !== "false";
+}
+
+export async function updateSessionStateCdpEnabled(enabled: boolean): Promise<void> {
+  await updateSettings({ "session-state-cdp-enabled": enabled ? "true" : "false" });
+  invalidateCache("settings");
+}
+
 // --- OpenClaw State Dir Override ---
 
 export interface OpenClawStateDirInfo {

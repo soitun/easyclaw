@@ -16,8 +16,8 @@ export interface EasyClawPluginOptions {
 
 /**
  * Creates the EasyClaw plugin that registers with the OpenClaw gateway.
- * It wires the policy injector (before_agent_start) which injects both
- * policy fragments and guard directives into the agent's system prompt.
+ * It wires the policy injector (before_prompt_build) which injects both
+ * policy fragments and guard directives into the system prompt.
  *
  * Guard enforcement via before_tool_call is intentionally disabled —
  * the current pattern matcher is too limited (only tool:/path: prefixes)
@@ -31,7 +31,7 @@ export function createEasyClawPlugin(options: EasyClawPluginOptions) {
     register(api: OpenClawPluginAPI): void {
       const policyHandler = createPolicyInjector(options.policyProvider, options.guardProvider);
 
-      api.registerHook("before_agent_start", policyHandler);
+      api.registerHook("before_prompt_build", policyHandler);
 
       log.info("EasyClaw plugin registered");
     },

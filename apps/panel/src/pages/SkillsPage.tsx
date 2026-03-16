@@ -1,7 +1,9 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { useQuery } from "@apollo/client/react";
+import { GQL } from "@easyclaw/core";
+import { SKILLS_QUERY } from "../api/skills-queries.js";
 import {
-  fetchMarketSkills,
   fetchInstalledSkills,
   fetchBundledSlugs,
   installSkill,
@@ -9,40 +11,35 @@ import {
   openSkillsFolder,
   trackEvent,
 } from "../api/index.js";
-import type { MarketSkill, InstalledSkill, MarketResponse } from "../api/index.js";
+import type { InstalledSkill } from "../api/index.js";
 import { ConfirmDialog } from "../components/ConfirmDialog.js";
 
 const PAGE_SIZE = 12;
 
+/** Map GQL SkillLabel enum values to badge CSS classes */
 const LABEL_BADGE_MAP: Record<string, string> = {
-  "推荐": "badge badge-info",
+  [GQL.SkillLabel.Recommended]: "badge badge-info",
 };
 
+/** Map GQL SkillLabel enum values to i18n keys */
 const LABEL_I18N_MAP: Record<string, string> = {
-  "推荐": "skills.labelRecommended",
+  [GQL.SkillLabel.Recommended]: "skills.labelRecommended",
 };
 
 export function SkillsPage() {
   const { t, i18n } = useTranslation();
   const isCN = i18n.language === "zh";
 
-  // Capture initial locale for API endpoint & chinaAvailable filter.
-  // Switching display language should NOT re-fetch — both zh/en data is in the response.
-  const initialIsCN = useRef(i18n.language === "zh").current;
-
   // Tab state
   const [activeTab, setActiveTab] = useState<"market" | "installed">("market");
 
   // Market state
-  const [marketSkills, setMarketSkills] = useState<MarketSkill[]>([]);
-  const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedQuery, setDebouncedQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<{ key: string; detail?: string } | null>(null);
   const [installingSlug, setInstallingSlug] = useState<string | null>(null);
+  const [error, setError] = useState<{ key: string; detail?: string } | null>(null);
 
   // Installed state
   const [installedSkills, setInstalledSkills] = useState<InstalledSkill[]>([]);
@@ -68,35 +65,29 @@ export function SkillsPage() {
     return () => clearTimeout(timer);
   }, [searchQuery]);
 
-  // Fetch market skills
+  // Apollo query for market skills
+  const { data: marketData, loading, error: gqlError } = useQuery<{ skills: GQL.SkillConnection }>(
+    SKILLS_QUERY,
+    {
+      variables: {
+        query: debouncedQuery || undefined,
+        category: selectedCategory || undefined,
+        page,
+        pageSize: PAGE_SIZE,
+        chinaAvailable: isCN ? true : undefined,
+      },
+    },
+  );
+
+  const marketSkills = marketData?.skills.skills ?? [];
+  const total = marketData?.skills.total ?? 0;
+
+  // Surface GraphQL errors
   useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    setError(null);
-    fetchMarketSkills({
-      query: debouncedQuery || undefined,
-      category: selectedCategory || undefined,
-      page,
-      pageSize: PAGE_SIZE,
-      chinaAvailable: initialIsCN ? true : undefined,
-      lang: initialIsCN ? "zh" : "en",
-    })
-      .then((data: MarketResponse) => {
-        if (cancelled) return;
-        setMarketSkills(data.skills);
-        setTotal(data.total);
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        setError({ key: "skills.installError", detail: String(err) });
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [debouncedQuery, selectedCategory, page]);
+    if (gqlError) {
+      setError({ key: "skills.installError", detail: gqlError.message });
+    }
+  }, [gqlError]);
 
   // Fetch installed skills when switching to installed tab
   const loadInstalled = useCallback(async () => {
@@ -124,7 +115,7 @@ export function SkillsPage() {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Handle install
-  async function handleInstall(skill: MarketSkill) {
+  async function handleInstall(skill: GQL.Skill) {
     setInstallingSlug(skill.slug);
     setError(null);
     try {

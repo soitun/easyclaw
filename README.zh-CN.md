@@ -60,10 +60,10 @@ pnpm install
 pnpm build
 
 # 3. 以开发模式启动
-pnpm --filter @easyclaw/desktop dev
+pnpm dev
 ```
 
-启动 Electron 托盘应用后，它会拉起 OpenClaw 网关并在 `http://localhost:3210` 提供管理面板。
+这会同时启动 Electron 托盘应用和面板开发服务器。托盘应用会拉起 OpenClaw 网关并在 `http://localhost:3210` 提供管理面板。
 
 ## 仓库结构
 
@@ -94,8 +94,7 @@ easyclaw/
 │   ├── test-local.sh             # 本地测试流程（构建 + 单元测试 + E2E 测试）
 │   ├── publish-release.sh        # 发布 GitHub Release 草稿
 │   ├── rebuild-native.sh         # 预编译 better-sqlite3（Node.js + Electron）
-│   ├── smoke-test-vendor.cjs     # Vendor 网关启动冒烟测试
-│   └── verify-vendor-bundle.cjs  # 干跑 Bundle 验证（发版前检查）
+│   └── vendor-runtime-packages.cjs  # 共享的 Vendor 外部包定义
 └── vendor/
     └── openclaw/         # 内置的 OpenClaw（gitignored）
 ```
@@ -196,9 +195,9 @@ pnpm --filter @easyclaw/gateway test
 
 1. 从 `vendor/openclaw/` 启动 OpenClaw 网关
 2. 在 `localhost:3210` 提供面板 UI 和 REST API
-3. 将网关配置和认证配置写入 `~/.openclaw/`
+3. 将网关配置和认证配置写入 `~/.easyclaw/openclaw/`
 4. 运行时从系统密钥链注入密钥（API 密钥 + OAuth 令牌）
-5. 监听 `~/.openclaw/skills/` 目录以热重载规则生成的 Skill 文件
+5. 监听 `~/.easyclaw/openclaw/skills/` 目录以热重载规则生成的 Skill 文件
 6. 关闭时将刷新后的 OAuth 令牌同步回密钥链
 
 ### REST API
@@ -225,12 +224,12 @@ pnpm --filter @easyclaw/gateway test
 
 | 路径                             | 用途                   |
 | -------------------------------- | ---------------------- |
-| `~/.easyclaw/easyclaw.db`        | SQLite 数据库          |
-| `~/.easyclaw/logs/`              | 应用日志               |
-| `~/.openclaw/`                   | OpenClaw 状态目录      |
-| `~/.openclaw/gateway/config.yml` | 网关配置               |
-| `~/.openclaw/sessions/`          | WhatsApp 会话          |
-| `~/.openclaw/skills/`            | 自动生成的 Skill 文件  |
+| `~/.easyclaw/db.sqlite`                  | SQLite 数据库          |
+| `~/.easyclaw/logs/`                      | 应用日志               |
+| `~/.easyclaw/openclaw/`                  | OpenClaw 状态目录      |
+| `~/.easyclaw/openclaw/openclaw.json`     | 网关配置               |
+| `~/.easyclaw/openclaw/sessions/`         | WhatsApp 会话          |
+| `~/.easyclaw/openclaw/skills/`           | 用户 Skill（市场安装 + 规则生成；作为 `extraSkillDirs` 与 OpenClaw 内置的 `~/.easyclaw/runtime/{hash}/skills/` 一起加载） |
 
 ## 构建安装包
 

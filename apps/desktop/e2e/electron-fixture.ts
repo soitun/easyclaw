@@ -60,9 +60,17 @@ async function ensurePortFree(port: number): Promise<void> {
   }
 }
 
-/** Compute unique ports for a Playwright worker based on its index. */
+/**
+ * Compute unique ports for a Playwright worker based on its index.
+ *
+ * Workers start at offset 100 (not 0) so worker-0 never collides with a
+ * running production EasyClaw instance that uses the same default ports.
+ * The vendor derives its browser CDP port from the gateway port
+ * (gateway + 2 + 9 = gateway + 11), so matching gateway ports would cause
+ * the test to connect to the production Chrome instead of launching its own.
+ */
 function computePorts(workerIndex: number): WorkerPorts {
-  const offset = workerIndex * 100;
+  const offset = (workerIndex + 1) * 100;
   return {
     gateway: DEFAULT_GATEWAY_PORT + offset,
     panel: DEFAULT_PANEL_PORT + offset,
@@ -158,6 +166,20 @@ async function launchElectronApp(
     // Kill it by its specific port (safe in parallel — other workers use
     // different ports).
     await ensurePortFree(ports.gateway);
+
+    // Chrome instances launched by ManagedBrowserService are detached
+    // (spawn with detached: true + unref) and use --user-data-dir under
+    // the test's temp directory. They survive Electron shutdown.
+    // Kill them by matching the unique tempDir in their command line.
+    try {
+      if (process.platform === "win32") {
+        execSync(`wmic process where "CommandLine like '%${tempDir.replace(/\\/g, "\\\\")}%'" call terminate 2>nul`, { stdio: "ignore", shell: "cmd.exe" });
+      } else {
+        execSync(`pkill -9 -f ${JSON.stringify(tempDir)} 2>/dev/null || true`, { stdio: "ignore" });
+      }
+    } catch {
+      // Best-effort cleanup
+    }
     if (testFailed) {
       // Keep temp dir for debugging — print its path
       console.log(`[e2e] Test FAILED — temp dir preserved: ${tempDir}`);

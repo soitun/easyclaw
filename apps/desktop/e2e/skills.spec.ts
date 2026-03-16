@@ -2,14 +2,15 @@ import { test, expect } from "./electron-fixture.js";
 
 test.describe("Skills Page", () => {
   test("install from server + delete lifecycle", async ({ electronApp, window, apiBase }) => {
-    // --- Get a real skill slug from the market API ---
-    const marketRes = await window.evaluate(async (base) => {
-      const res = await fetch(`${base}/api/skills/market?pageSize=1`);
+    // --- Get a real skill slug from the bundled-slugs API ---
+    const bundledRes = await window.evaluate(async (base) => {
+      const res = await fetch(`${base}/api/skills/bundled-slugs`);
       return { status: res.status, body: await res.json() };
     }, apiBase);
-    expect(marketRes.status).toBe(200);
-    expect(marketRes.body.skills.length).toBeGreaterThanOrEqual(1);
-    const realSlug = marketRes.body.skills[0].slug as string;
+    expect(bundledRes.status).toBe(200);
+    expect(bundledRes.body.slugs.length).toBeGreaterThanOrEqual(1);
+    // Use the first bundled slug as a known-good slug for install/delete test
+    const realSlug = bundledRes.body.slugs[0] as string;
 
     // --- Install skill via API (downloads from server) ---
     const installRes = await window.evaluate(async (arg: { base: string; slug: string }) => {
@@ -251,45 +252,6 @@ test.describe("Skills Page", () => {
   });
 
   test("API validation", async ({ window, apiBase }) => {
-    // --- Verify API responses directly ---
-    // GET /api/skills/market — proxy to server GraphQL
-    const marketRes = await window.evaluate(async (base) => {
-      const res = await fetch(`${base}/api/skills/market`);
-      return { status: res.status, body: await res.json() };
-    }, apiBase);
-    expect(marketRes.status).toBe(200);
-    expect(marketRes.body).toHaveProperty("skills");
-    expect(marketRes.body).toHaveProperty("total");
-    expect(marketRes.body).toHaveProperty("page");
-    expect(marketRes.body).toHaveProperty("pageSize");
-    expect(Array.isArray(marketRes.body.skills)).toBe(true);
-    expect(marketRes.body.skills.length).toBeGreaterThanOrEqual(1);
-
-    // Verify skill shape
-    const skill = marketRes.body.skills[0];
-    expect(skill).toHaveProperty("slug");
-    expect(skill).toHaveProperty("name_en");
-    expect(skill).toHaveProperty("name_zh");
-    expect(skill).toHaveProperty("desc_en");
-    expect(skill).toHaveProperty("desc_zh");
-    expect(skill).toHaveProperty("author");
-    expect(skill).toHaveProperty("version");
-    expect(skill).toHaveProperty("tags");
-    expect(skill).toHaveProperty("labels");
-    expect(skill).toHaveProperty("stars");
-    expect(skill).toHaveProperty("downloads");
-    expect(typeof skill.stars).toBe("number");
-    expect(typeof skill.downloads).toBe("number");
-
-    // GET /api/skills/market with search query
-    const searchRes = await window.evaluate(async (base) => {
-      const res = await fetch(`${base}/api/skills/market?query=test&page=1&pageSize=5`);
-      return { status: res.status, body: await res.json() };
-    }, apiBase);
-    expect(searchRes.status).toBe(200);
-    expect(searchRes.body).toHaveProperty("skills");
-    expect(searchRes.body.pageSize).toBe(5);
-
     // --- Verify installed skills API (empty in e2e) ---
     const installedRes = await window.evaluate(async (base) => {
       const res = await fetch(`${base}/api/skills/installed`);

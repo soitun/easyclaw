@@ -3,9 +3,14 @@ import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { Modal } from "../../components/Modal.js";
 import { Select } from "../../components/Select.js";
+import { ToolSelector } from "../../components/ToolSelector.js";
 import { fetchChannelStatus, fetchAllowlist, setRecipientLabel, type ChannelsStatusSnapshot } from "../../api/channels.js";
+import { useToolRegistry } from "../../providers/ToolRegistryProvider.js";
 import type { CronJob, CronJobFormData, ScheduleKind, PayloadKind, EveryUnit, CronWakeMode, CronDeliveryMode, FormErrors } from "./cron-utils.js";
 import { defaultFormData, cronJobToFormData, formDataToCreateParams, formDataToPatch, validateCronForm, TIMEZONE_ENTRIES } from "./cron-utils.js";
+
+/** Stable scope key used for tool selections when creating a new cron job (no real ID yet). */
+export const TEMP_CRON_SCOPE_KEY = "__new_cron__";
 
 interface CronJobFormProps {
   mode: "create" | "edit";
@@ -101,6 +106,7 @@ export function CronJobForm({ mode, initialData, onSubmit, onCancel }: CronJobFo
   const [allowlist, setAllowlist] = useState<string[]>([]);
   const [recipientLabels, setRecipientLabels] = useState<Record<string, string>>({});
   const [allowlistLoading, setAllowlistLoading] = useState(false);
+  const { hasTools } = useToolRegistry();
 
   useEffect(() => {
     let cancelled = false;
@@ -703,6 +709,17 @@ export function CronJobForm({ mode, initialData, onSubmit, onCancel }: CronJobFo
                 }))}
               />
             </div>
+            {hasTools && (
+              <div className="form-group">
+                <label className="form-label-block">{t("tools.selector.title")}</label>
+                <div className="form-hint">{t("crons.toolSelectionHint")}</div>
+                <ToolSelector
+                  scopeType="cron_job"
+                  scopeKey={mode === "edit" && initialData ? initialData.id : TEMP_CRON_SCOPE_KEY}
+                  dropdown
+                />
+              </div>
+            )}
           </div>
         )}
       </div>

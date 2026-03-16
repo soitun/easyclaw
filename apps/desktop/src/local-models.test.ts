@@ -130,6 +130,8 @@ beforeAll(async () => {
     panelDistDir: "/tmp/nonexistent-panel-dist",
     storage,
     secretStore: mockSecretStore as any,
+    vendorDir: "/tmp/nonexistent-vendor",
+    nodeBin: process.execPath,
     onRuleChange: () => {},
     onProviderChange: () => {},
   });

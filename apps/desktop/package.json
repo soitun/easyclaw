@@ -46,6 +46,12 @@
     "ws": "^8.18.0"
   },
   "devDependencies": {
+    "@easyclaw/browser-profiles-tools": "workspace:*",
+    "@easyclaw/easyclaw-event-bridge": "workspace:*",
+    "@easyclaw/easyclaw-policy": "workspace:*",
+    "@easyclaw/easyclaw-tools": "workspace:*",
+    "@easyclaw/file-permissions": "workspace:*",
+    "@easyclaw/mobile-chat-channel": "workspace:*",
     "@electron/notarize": "^3.0.0",
     "@electron/rebuild": "^4.0.3",
     "@playwright/test": "^1.58.2",

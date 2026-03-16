@@ -1,6 +1,6 @@
 export type {
-  AgentStartContext,
-  AgentStartResult,
+  PromptBuildEvent,
+  PromptBuildResult,
   ToolCallContext,
   ToolCallResult,
   PolicyProvider,

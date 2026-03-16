@@ -26,6 +26,21 @@ Clones and builds `vendor/openclaw` from the commit pinned in `.openclaw-version
 ./scripts/setup-vendor.sh --prod   # prod build (production deps only)
 ```
 
+### provision-vendor-patched.sh
+
+Creates a disposable patched OpenClaw workspace from pristine `vendor/openclaw`
+plus the replayable patch stack in `vendor-patches/openclaw/`. The default
+target is `tmp/vendor-patched/openclaw`.
+
+```bash
+./scripts/provision-vendor-patched.sh
+./scripts/provision-vendor-patched.sh --skip-build
+./scripts/provision-vendor-patched.sh --target /tmp/openclaw-patched --prod
+```
+
+Use this for vendor patch replay validation in CI and during OpenClaw upgrades.
+It intentionally does not modify the canonical `vendor/openclaw` checkout.
+
 ### test-local.sh
 
 Full local test pipeline: install, build, unit tests, E2E tests (dev + prod), and pack.

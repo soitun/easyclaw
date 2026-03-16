@@ -52,6 +52,33 @@ export type {
   CSWSFrame,
   PlatformAdapter,
 } from "./customer-service.js";
+export type {
+  BrowserProfileId,
+  BrowserProfileStatus,
+  BrowserProfileProxyPolicy,
+  BrowserProfileVisibility,
+  BrowserProfileEntitlement,
+  BrowserProfileSummary,
+  BrowserProfileDetail,
+  BrowserProfileResolveResult,
+  BrowserProfilesDisclosureLevel,
+  BrowserProfilesCapabilityBinding,
+  AgentRunCapabilityContext,
+  BrowserProfilesFilterInput,
+  CreateBrowserProfileInput,
+  UpdateBrowserProfileInput,
+  BrowserProfileProxyTestResult,
+  BrowserProfilesToolAction,
+  BrowserProfilesToolRequest,
+  BrowserProfilesToolResponse,
+  BrowserProfileSessionStateMode,
+  BrowserProfileSessionStateStorage,
+  BrowserProfileSessionStatePolicy,
+  BrowserProfileSessionSnapshotMeta,
+  BrowserProfileRuntimeStateSummary,
+  SessionStateRuntimeTarget,
+} from "./browser-profiles.js";
+export { DEFAULT_SESSION_STATE_POLICY } from "./browser-profiles.js";
 
 export type {
   PairingRequest,
@@ -62,3 +89,18 @@ export type {
 
 export type { WsEnvelope } from "./mobile-ws.js";
 
+export type {
+  MobileGraphQLError,
+  MobileGraphQLRequest,
+  MobileGraphQLResponse,
+  RegisterPairingInput,
+  RegisterPairingResult,
+} from "./mobile-chat-graphql.js";
+
+export type {
+  ToolScopeType,
+  ToolSelection,
+  ToolSelectionScope,
+  ScopedToolConfig,
+  AgentRunToolContext,
+} from "./tool-selection.js";

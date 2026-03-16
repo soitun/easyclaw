@@ -1,22 +1,6 @@
 import { fetchJson, cachedFetch, invalidateCache } from "./client.js";
 
-// --- Skills Marketplace ---
-
-export interface MarketSkill {
-  slug: string;
-  name_en: string;
-  name_zh: string;
-  desc_en: string;
-  desc_zh: string;
-  author: string;
-  version: string;
-  tags: string[];
-  labels: string[];
-  chinaAvailable: boolean;
-  stars: number;
-  downloads: number;
-  hidden: boolean;
-}
+// --- Skills Marketplace (local operations) ---
 
 export interface InstalledSkill {
   slug: string;
@@ -33,32 +17,6 @@ export interface SkillCategory {
   name_en: string;
   name_zh: string;
   count: number;
-}
-
-export interface MarketResponse {
-  skills: MarketSkill[];
-  total: number;
-  page: number;
-  pageSize: number;
-}
-
-export async function fetchMarketSkills(params?: {
-  query?: string;
-  category?: string;
-  page?: number;
-  pageSize?: number;
-  chinaAvailable?: boolean;
-  lang?: string;
-}): Promise<MarketResponse> {
-  const qs = new URLSearchParams();
-  if (params?.query) qs.set("query", params.query);
-  if (params?.category) qs.set("category", params.category);
-  if (params?.page) qs.set("page", String(params.page));
-  if (params?.pageSize) qs.set("pageSize", String(params.pageSize));
-  if (params?.chinaAvailable !== undefined) qs.set("chinaAvailable", String(params.chinaAvailable));
-  if (params?.lang) qs.set("lang", params.lang);
-  const q = qs.toString();
-  return fetchJson<MarketResponse>("/skills/market" + (q ? "?" + q : ""));
 }
 
 export async function fetchInstalledSkills(): Promise<InstalledSkill[]> {
