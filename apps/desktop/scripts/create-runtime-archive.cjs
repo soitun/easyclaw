@@ -1479,10 +1479,12 @@ function createArchive() {
 
   // Create tar.gz archive from the staging directory.
   // Use -C to cd into the staging parent so the archive root is "openclaw/"
+  // On Windows, convert backslashes to forward slashes for tar compatibility.
+  const toSlash = (p) => p.replace(/\\/g, "/");
   const tarCmd = [
-    "tar", "czf", archivePath,
+    "tar", "czf", toSlash(archivePath),
     ...excludes,
-    "-C", path.dirname(stagingDir),
+    "-C", toSlash(path.dirname(stagingDir)),
     path.basename(stagingDir),
   ].join(" ");
 
