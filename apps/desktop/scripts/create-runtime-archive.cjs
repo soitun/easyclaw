@@ -1488,7 +1488,7 @@ function createArchive() {
 
   const t0 = Date.now();
   try {
-    execSync(tarCmd, { stdio: "inherit", timeout: 300_000 });
+    execSync(tarCmd, { stdio: "inherit", timeout: 600_000 });
   } catch (err) {
     console.error("[create-runtime-archive] tar command failed:", /** @type {Error} */ (err).message);
     process.exit(1);
