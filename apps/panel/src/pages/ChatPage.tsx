@@ -8,7 +8,7 @@ import { GatewayChatClient } from "../lib/gateway-client.js";
 import type { ChatMessage, ChatImage, PendingImage } from "./chat/chat-utils.js";
 import { INITIAL_VISIBLE, PAGE_SIZE, FETCH_BATCH, IMAGE_PLACEHOLDER, cleanMessageText, formatTimestamp, extractText, localizeError, parseRawMessages } from "./chat/chat-utils.js";
 import type { SessionsListResult } from "./chat/chat-utils.js";
-import { MarkdownMessage, CopyButton, CollapsibleContent } from "./chat/ChatMessage.js";
+import { MarkdownMessage, CopyButton, CollapsibleContent, ToolArgsDisplay } from "./chat/ChatMessage.js";
 import type { GatewayEvent, GatewayHelloOk } from "../lib/gateway-client.js";
 import { RunTracker } from "../lib/run-tracker.js";
 import { ChatEventBridge } from "../lib/chat-event-bridge.js";
@@ -310,7 +310,8 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
           // DEBUG: log tool_start flush state
           console.info("[chat] tool_start: tool=%s flushedText=%s runId=%s",
             name, flushedText ? `"${flushedText.slice(0, 40)}..." (${flushedText.length}ch)` : "null", agentRunId);
-          const toolEvt: ChatMessage = { role: "tool-event", text: name, toolName: name, timestamp: Date.now() };
+          const args = agentPayload.data?.args as Record<string, unknown> | undefined;
+          const toolEvt: ChatMessage = { role: "tool-event", text: name, toolName: name, toolArgs: args, timestamp: Date.now() };
           if (flushedText) {
             setMessages((prev) => [...prev, { role: "assistant", text: flushedText, timestamp: Date.now() }, toolEvt]);
             // The gateway throttles deltas at 150 ms.  The last few characters
@@ -1037,8 +1038,13 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
             if (msg.role === "tool-event") {
               return preserveToolEvents ? (
                 <div key={i} className="chat-tool-event">
-                  <span className="chat-tool-event-icon">&#9881;</span>
-                  {t("chat.toolEventLabel", { tool: msg.toolName })}
+                  <div className="chat-tool-event-header">
+                    <span className="chat-tool-event-icon">&#9881;</span>
+                    {t("chat.toolEventLabel", { tool: msg.toolName })}
+                  </div>
+                  {msg.toolArgs && Object.keys(msg.toolArgs).length > 0 && (
+                    <ToolArgsDisplay args={msg.toolArgs} />
+                  )}
                 </div>
               ) : null;
             }

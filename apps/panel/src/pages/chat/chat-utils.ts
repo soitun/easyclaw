@@ -8,6 +8,8 @@ export type ChatMessage = {
   timestamp: number;
   images?: ChatImage[];
   toolName?: string;
+  /** Tool call arguments — present on tool-event messages when the gateway provides them. */
+  toolArgs?: Record<string, unknown>;
   /** Gateway-assigned idempotency key — present on user messages loaded from history. */
   idempotencyKey?: string;
   /** True for user messages from external channels (Telegram, Chrome, etc.), not typed in the panel. */
@@ -261,6 +263,29 @@ function extractToolInputMessage(block: Record<string, unknown>): string | null 
 }
 
 /**
+ * Extract tool call arguments from a content block.
+ * Handles Anthropic (input), Pi Agent (arguments as object), and OpenAI (arguments as JSON string).
+ */
+function extractToolArgs(block: Record<string, unknown>): Record<string, unknown> | undefined {
+  for (const field of ["input", "arguments", "args"]) {
+    const val = block[field];
+    if (!val) continue;
+    if (typeof val === "object" && !Array.isArray(val)) {
+      return val as Record<string, unknown>;
+    }
+    if (typeof val === "string") {
+      try {
+        const parsed = JSON.parse(val);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch { /* malformed JSON — skip */ }
+    }
+  }
+  return undefined;
+}
+
+/**
  * Content block types that represent tool calls across different API formats:
  * - tool_use / tooluse: Anthropic format
  * - tool_call / toolcall: generic format
@@ -321,7 +346,8 @@ export function parseRawMessages(
         for (const block of msg.content) {
           const b = block as Record<string, unknown>;
           if (isToolCallBlock(b) && typeof b.name === "string") {
-            parsed.push({ role: "tool-event", text: b.name, toolName: b.name, timestamp: msg.timestamp ?? 0 });
+            const args = extractToolArgs(b);
+            parsed.push({ role: "tool-event", text: b.name, toolName: b.name, toolArgs: args, timestamp: msg.timestamp ?? 0 });
             // Extract delivered text from outbound message tool calls.
             // The "message" tool sends text to external channels; the actual
             // message content lives in input.message (Anthropic format) or

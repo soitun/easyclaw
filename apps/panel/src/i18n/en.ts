@@ -80,6 +80,7 @@ export default {
     phase_generating: "Generating response...",
     phaseUsingTool: "Using tool: {{tool}}",
     toolEventLabel: "Used tool: {{tool}}",
+    toolArgsLabel: "Parameters",
     stopCommand: "Stop",
     resetCommand: "Reset",
     resetTooltip: "Clear the conversation context to save tokens. Chat history will be archived but will no longer be visible to the AI.",
