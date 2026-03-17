@@ -14,6 +14,7 @@ export type ChatInputAreaProps = {
   isStreaming: boolean;
   canAbort: boolean;
   connectionState: "connecting" | "connected" | "disconnected";
+  hasProviderKeys: boolean;
   onDraftChange: (text: string) => void;
   onPendingImagesChange: (images: PendingImage[]) => void;
   onSend: () => void;
@@ -26,6 +27,7 @@ export function ChatInputArea({
   isStreaming,
   canAbort,
   connectionState,
+  hasProviderKeys,
   onDraftChange,
   onPendingImagesChange,
   onSend,
@@ -246,7 +248,8 @@ export function ChatInputArea({
           <button
             className="btn btn-primary"
             onClick={onSend}
-            disabled={(!draft.trim() && pendingImages.length === 0) || connectionState !== "connected"}
+            disabled={(!draft.trim() && pendingImages.length === 0) || connectionState !== "connected" || !hasProviderKeys}
+            title={!hasProviderKeys ? t("chat.noProviderError") : undefined}
           >
             {t("chat.send")}
           </button>

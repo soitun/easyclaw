@@ -32,6 +32,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
   const [agentName, setAgentName] = useState<string | null>(null);
   const [activeModel, setActiveModel] = useState<{ keyId: string; provider: string; model: string } | null>(null);
   const [modelOptions, setModelOptions] = useState<{ value: string; label: string }[]>([]);
+  const [hasProviderKeys, setHasProviderKeys] = useState(true);
   const [thinkingLevel, setThinkingLevel] = useState("");
   const [allFetched, setAllFetched] = useState(false);
   const [renderTick, forceUpdate] = useReducer((x: number) => x + 1, 0);
@@ -622,11 +623,14 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
     configManager.getActiveKey().then(async (info) => {
       if (info) {
         setActiveModel({ keyId: info.keyId, provider: info.provider, model: info.model });
+        setHasProviderKeys(true);
         const models = await configManager.getModelsForProvider(info.provider);
         setModelOptions(models.map((m) => ({ value: m.id, label: m.name })));
       } else {
         setActiveModel(null);
         setModelOptions([]);
+        // Check if any provider keys exist at all
+        fetchProviderKeys().then((keys) => setHasProviderKeys(keys.length > 0)).catch(() => {});
       }
     }).catch(() => { setActiveModel(null); setModelOptions([]); });
   }
@@ -1250,6 +1254,7 @@ export function ChatPage({ onAgentNameChange }: { onAgentNameChange?: (name: str
         isStreaming={isStreaming}
         canAbort={trackerRef.current.getView().canAbort}
         connectionState={connectionState}
+        hasProviderKeys={hasProviderKeys}
         onDraftChange={setDraft}
         onPendingImagesChange={setPendingImages}
         onSend={handleSend}
