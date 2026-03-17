@@ -132,6 +132,8 @@ beforeAll(async () => {
     secretStore: mockSecretStore as any,
     onRuleChange: () => {},
     onProviderChange: () => {},
+    vendorDir: "/tmp/nonexistent-vendor",
+    nodeBin: process.execPath,
   });
 
   await new Promise<void>((resolve) => {

@@ -60,7 +60,7 @@ function ToggleSwitch({ checked, onChange, disabled }: { checked: boolean; onCha
   );
 }
 
-export function AppsPage() {
+export function AppsPage(_props: { onNavigate?: (path: string) => void }) {
   const { t, i18n } = useTranslation();
 
   // WeCom config state

@@ -8,6 +8,8 @@ export type ChatMessage = {
   timestamp: number;
   images?: ChatImage[];
   toolName?: string;
+  /** Parsed tool arguments for tool-event messages. */
+  toolArgs?: Record<string, unknown>;
   /** Gateway-assigned idempotency key — present on user messages loaded from history. */
   idempotencyKey?: string;
   /** True for user messages from external channels (Telegram, Chrome, etc.), not typed in the panel. */

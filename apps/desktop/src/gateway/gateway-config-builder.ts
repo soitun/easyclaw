@@ -7,6 +7,8 @@ import { buildOwnerAllowFrom } from "../auth/owner-sync.js";
 
 export interface GatewayConfigDeps {
   storage: Storage;
+  secretStore?: unknown;
+  authSession?: unknown;
   locale: string;
   configPath: string;
   stateDir: string;

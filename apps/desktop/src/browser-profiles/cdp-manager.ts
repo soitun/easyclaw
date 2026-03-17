@@ -22,7 +22,7 @@ export interface CdpManagerDeps {
   };
   launcher: { reload(): Promise<void> };
   writeGatewayConfig: (options: WriteGatewayConfigOptions) => string;
-  buildFullGatewayConfig: () => Promise<WriteGatewayConfigOptions>;
+  buildFullGatewayConfig: () => WriteGatewayConfigOptions | Promise<WriteGatewayConfigOptions>;
   /** Called when CDP Chrome is confirmed accessible (probe succeeded). */
   onCdpReady?: (port: number) => void;
 }

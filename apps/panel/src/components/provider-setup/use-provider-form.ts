@@ -2,7 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@apollo/client/react";
 import { getDefaultModelForProvider, getProviderMeta } from "@rivonclaw/core";
-import type { LLMProvider, GQL } from "@rivonclaw/core";
+import type { LLMProvider } from "@rivonclaw/core";
+import type { ProviderPricing } from "../../api/index.js";
 import {
   fetchProviderKeys,
   updateSettings,
@@ -57,7 +58,7 @@ export function useProviderForm(onSave: (provider: string) => void) {
   const [oauthManualLoading, setOauthManualLoading] = useState(false);
   const [oauthFlowId, setOauthFlowId] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const [pricingList, setPricingList] = useState<GQL.ProviderPricing[] | null>(null);
+  const [pricingList, setPricingList] = useState<ProviderPricing[] | null>(null);
   const [pricingLoading, setPricingLoading] = useState(true);
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [existingKeyCount, setExistingKeyCount] = useState<number | null>(null);
@@ -99,7 +100,7 @@ export function useProviderForm(onSave: (provider: string) => void) {
     : navigator.userAgent.includes("Win") ? "win32" : "linux";
 
   // Fetch pricing via Apollo (skipped until deviceId is known)
-  const { data: pricingData, loading: pricingQueryLoading } = useQuery<{ pricing: GQL.ProviderPricing[] }>(PRICING_QUERY, {
+  const { data: pricingData, loading: pricingQueryLoading } = useQuery<{ pricing: ProviderPricing[] }>(PRICING_QUERY, {
     variables: { deviceId: deviceId ?? "", platform: pricingPlatform, appVersion: "0.8.0", language: pricingLang },
     skip: !deviceId,
     fetchPolicy: "cache-first",

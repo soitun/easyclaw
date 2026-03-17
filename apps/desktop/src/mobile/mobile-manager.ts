@@ -83,4 +83,52 @@ export class MobileManager {
     public clearActiveCode(): void {
         this.activeCode = null;
     }
+
+    public async requestPairingCode(): Promise<{ code: string; expiresAt: number }> {
+        const desktopDeviceId = this.getDesktopDeviceId();
+        const res = await fetch(`${this.controlPlaneUrl}/v1/mobile/pairing-code`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ desktopDeviceId }),
+        });
+        if (!res.ok) {
+            throw new Error(`Failed to request pairing code: ${res.status} ${res.statusText}`);
+        }
+        const data = await res.json() as { code: string };
+        const expiresAt = Date.now() + PAIRING_CODE_TTL_MS;
+        this.activeCode = { code: data.code, expiresAt };
+        return { code: data.code, expiresAt };
+    }
+
+    public async getInstallUrl(): Promise<{ url: string }> {
+        const desktopDeviceId = this.getDesktopDeviceId();
+        const res = await fetch(`${this.controlPlaneUrl}/v1/mobile/install-url?desktopDeviceId=${encodeURIComponent(desktopDeviceId)}`);
+        if (!res.ok) {
+            throw new Error(`Failed to get install URL: ${res.status} ${res.statusText}`);
+        }
+        return await res.json() as { url: string };
+    }
+
+    public async waitForControlPlaneToken(code: string): Promise<{
+        paired: boolean;
+        accessToken?: string;
+        relayUrl?: string;
+        pairingId?: string;
+        desktopDeviceId?: string;
+        mobileDeviceId?: string;
+    } | null> {
+        const res = await fetch(`${this.controlPlaneUrl}/v1/mobile/pairing-status?code=${encodeURIComponent(code)}`);
+        if (!res.ok) {
+            log.warn(`Pairing status check failed: ${res.status}`);
+            return null;
+        }
+        return await res.json() as {
+            paired: boolean;
+            accessToken?: string;
+            relayUrl?: string;
+            pairingId?: string;
+            desktopDeviceId?: string;
+            mobileDeviceId?: string;
+        };
+    }
 }
