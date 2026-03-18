@@ -78,6 +78,8 @@ const EXTERNAL_PACKAGES = [
 // Path to the static vendor model catalog JSON that replaces the dynamic
 // import of @mariozechner/pi-ai/dist/models.generated.js at runtime.
 const VENDOR_MODELS_JSON = path.join(distDir, "vendor-models.json");
+const VENDOR_CODEX_OAUTH_JS = path.join(distDir, "vendor-codex-oauth.js");
+const VENDOR_CODEX_PKCE_JS = path.join(distDir, "vendor-codex-pkce.js");
 
 // Files to preserve in dist/ (everything else is a chunk file to delete).
 // After Phase 2 the bundle IS entry.js (renamed from temp), so only entry.js
@@ -87,6 +89,8 @@ const KEEP_DIST_FILES = new Set([
   "babel.cjs", // jiti safety net (kept in case any .ts extension was missed)
   ".bundled",
   "vendor-models.json",
+  "vendor-codex-oauth.js",
+  "vendor-codex-pkce.js",
   "warning-filter.js",
   "warning-filter.mjs",
 ]);
@@ -326,6 +330,58 @@ async function extractVendorModelCatalog() {
   console.log(
     `[bundle-vendor-deps] Wrote vendor-models.json: ${Object.keys(catalog).length} providers, ` +
       `${totalModels} models (${(size / 1024).toFixed(1)}KB)`,
+  );
+}
+
+// ─── Phase 0.1: Extract minimal Codex OAuth helper from vendor pi-ai ───
+// Packaged releases only need pi-ai's Node-only Codex OAuth helper, not the
+// entire provider/runtime tree. Copy the exact upstream files into dist/ so we
+// keep following vendor updates while avoiding the large package keep-set.
+
+function stripSourceMapComment(text) {
+  return text.replace(/\n\/\/# sourceMappingURL=.*\n?$/u, "\n");
+}
+
+function extractVendorCodexOAuthHelper() {
+  console.log("[bundle-vendor-deps] Phase 0.1: Extracting vendor Codex OAuth helper...");
+
+  const oauthDir = path.join(nmDir, "@mariozechner", "pi-ai", "dist", "utils", "oauth");
+  const sourceOauth = path.join(oauthDir, "openai-codex.js");
+  const sourcePkce = path.join(oauthDir, "pkce.js");
+
+  if (!fs.existsSync(sourceOauth) || !fs.existsSync(sourcePkce)) {
+    throw new Error(
+      "Missing vendor Codex OAuth helper files. Expected pi-ai dist/utils/oauth/openai-codex.js and pkce.js.",
+    );
+  }
+
+  const oauthSource = fs.readFileSync(sourceOauth, "utf8");
+  const pkceSource = fs.readFileSync(sourcePkce, "utf8");
+
+  const relativeImports = [...oauthSource.matchAll(/^import\s+.*?from\s+["'](.+?)["'];?$/gmu)].map((m) => m[1]);
+  if (relativeImports.length !== 1 || relativeImports[0] !== "./pkce.js") {
+    throw new Error(
+      `Unexpected Codex OAuth helper imports: ${relativeImports.join(", ") || "(none)"}. Review upstream pi-ai changes before bundling.`,
+    );
+  }
+  if (!oauthSource.includes("export async function loginOpenAICodex(")) {
+    throw new Error("Vendor Codex OAuth helper no longer exports loginOpenAICodex. Review upstream pi-ai changes.");
+  }
+  if ([...pkceSource.matchAll(/^import\s+.*?from\s+["'](.+?)["'];?$/gmu)].length > 0) {
+    throw new Error("Vendor Codex PKCE helper gained imports. Review upstream pi-ai changes before bundling.");
+  }
+
+  const rewrittenOauth = stripSourceMapComment(
+    oauthSource.replace('./pkce.js', "./vendor-codex-pkce.js"),
+  );
+  const rewrittenPkce = stripSourceMapComment(pkceSource);
+
+  fs.writeFileSync(VENDOR_CODEX_OAUTH_JS, rewrittenOauth, "utf8");
+  fs.writeFileSync(VENDOR_CODEX_PKCE_JS, rewrittenPkce, "utf8");
+
+  console.log(
+    `[bundle-vendor-deps] Wrote vendor-codex-oauth.js (${(fs.statSync(VENDOR_CODEX_OAUTH_JS).size / 1024).toFixed(1)}KB) ` +
+      `and vendor-codex-pkce.js (${(fs.statSync(VENDOR_CODEX_PKCE_JS).size / 1024).toFixed(1)}KB)`,
   );
 }
 
@@ -1662,6 +1718,7 @@ if (!fs.existsSync(nmDir)) {
 (async () => {
   const t0 = Date.now();
   await extractVendorModelCatalog();
+  extractVendorCodexOAuthHelper();
   const { externals: extExternals, inlinedCount } = prebundleExtensions();
   bundlePluginSdk();
   patchVendorConstants();
