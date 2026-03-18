@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery } from "@apollo/client/react";
-import type { ProviderPricing } from "../api/index.js";
+import type { GQL } from "@rivonclaw/core";
 import {
   fetchKeyUsage, fetchActiveKeyUsage, fetchKeyUsageTimeseries,
   type KeyModelUsageSummary, type ActiveKeyInfo, type KeyUsageDailyBucket,
@@ -42,7 +42,7 @@ export function KeyUsagePage() {
     : navigator.userAgent.includes("Win") ? "win32" : "linux";
 
   // Fetch pricing via Apollo (skipped until deviceId is known)
-  const { data: pricingData } = useQuery<{ pricing: ProviderPricing[] }>(PRICING_QUERY, {
+  const { data: pricingData } = useQuery<{ pricing: GQL.ProviderPricing[] }>(PRICING_QUERY, {
     variables: { deviceId: deviceId ?? "", platform: pricingPlatform, appVersion: "0.8.0", language: pricingLang },
     skip: !deviceId,
     fetchPolicy: "cache-first",

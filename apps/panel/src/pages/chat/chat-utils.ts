@@ -8,7 +8,7 @@ export type ChatMessage = {
   timestamp: number;
   images?: ChatImage[];
   toolName?: string;
-  /** Parsed tool arguments for tool-event messages. */
+  /** Tool call arguments — present on tool-event messages when the gateway provides them. */
   toolArgs?: Record<string, unknown>;
   /** Gateway-assigned idempotency key — present on user messages loaded from history. */
   idempotencyKey?: string;
@@ -99,10 +99,6 @@ export function cleanMessageText(text: string): string {
 
   // Strip agent framework tool-result summaries (e.g. "System: [2026-02-24 16:16:41 PST] Exec completed ...")
   cleaned = cleaned.replace(/^System: \[\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(:\d{2})? [A-Z]{2,5}\].*$/gm, "").trim();
-
-  // Strip RivonClaw prependContext blocks (runtime env, policy, guards)
-  // These are injected by plugins for the agent but not meant for the user.
-  cleaned = cleaned.replace(/---\s+RivonClaw[\s\S]*?---\s+End\s+\w[\w\s]*---/g, "").trim();
 
   // Strip queue-collected message wrapper produced by OpenClaw's drain.ts
   // when messages arrive while the agent is busy processing another run.
@@ -267,6 +263,29 @@ function extractToolInputMessage(block: Record<string, unknown>): string | null 
 }
 
 /**
+ * Extract tool call arguments from a content block.
+ * Handles Anthropic (input), Pi Agent (arguments as object), and OpenAI (arguments as JSON string).
+ */
+function extractToolArgs(block: Record<string, unknown>): Record<string, unknown> | undefined {
+  for (const field of ["input", "arguments", "args"]) {
+    const val = block[field];
+    if (!val) continue;
+    if (typeof val === "object" && !Array.isArray(val)) {
+      return val as Record<string, unknown>;
+    }
+    if (typeof val === "string") {
+      try {
+        const parsed = JSON.parse(val);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          return parsed as Record<string, unknown>;
+        }
+      } catch { /* malformed JSON — skip */ }
+    }
+  }
+  return undefined;
+}
+
+/**
  * Content block types that represent tool calls across different API formats:
  * - tool_use / tooluse: Anthropic format
  * - tool_call / toolcall: generic format
@@ -327,7 +346,8 @@ export function parseRawMessages(
         for (const block of msg.content) {
           const b = block as Record<string, unknown>;
           if (isToolCallBlock(b) && typeof b.name === "string") {
-            parsed.push({ role: "tool-event", text: b.name, toolName: b.name, timestamp: msg.timestamp ?? 0 });
+            const args = extractToolArgs(b);
+            parsed.push({ role: "tool-event", text: b.name, toolName: b.name, toolArgs: args, timestamp: msg.timestamp ?? 0 });
             // Extract delivered text from outbound message tool calls.
             // The "message" tool sends text to external channels; the actual
             // message content lives in input.message (Anthropic format) or

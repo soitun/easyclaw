@@ -1,5 +1,6 @@
 import { CNY_USD } from "@rivonclaw/core";
-import type { KeyModelUsageSummary, ActiveKeyInfo, KeyUsageDailyBucket, ProviderPricing } from "../../api/index.js";
+import type { GQL } from "@rivonclaw/core";
+import type { KeyModelUsageSummary, ActiveKeyInfo, KeyUsageDailyBucket } from "../../api/index.js";
 
 export type TimeRange = "7d" | "30d" | "all";
 
@@ -32,7 +33,7 @@ export function formatTokens(n: number): string {
 export type PricingEntry = { inputPerM: number; outputPerM: number; currency: string };
 export type PricingMap = Map<string, PricingEntry>; // key: "provider/modelId"
 
-export function buildPricingMap(list: ProviderPricing[]): PricingMap {
+export function buildPricingMap(list: GQL.ProviderPricing[]): PricingMap {
   const map: PricingMap = new Map();
   for (const pp of list) {
     for (const m of pp.models) {

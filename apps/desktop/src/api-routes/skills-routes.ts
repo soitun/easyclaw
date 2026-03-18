@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import AdmZip from "adm-zip";
-import { formatError, getGraphqlUrl, getApiBaseUrl } from "@rivonclaw/core";
+import { formatError, getApiBaseUrl } from "@rivonclaw/core";
 import { createLogger } from "@rivonclaw/logger";
 import { initCSBridge, startCS, stopCS, getCSStatus, updateCSConfig } from "../channels/customer-service-bridge.js";
 import type { RouteHandler } from "./api-context.js";
@@ -13,47 +13,8 @@ const log = createLogger("panel-server");
 export const handleSkillsRoutes: RouteHandler = async (req, res, url, pathname, ctx) => {
   const { vendorDir } = ctx;
 
-  // --- Skills Marketplace ---
-  if (pathname === "/api/skills/market" && req.method === "GET") {
-    const query = url.searchParams.get("query") ?? undefined;
-    const category = url.searchParams.get("category") ?? undefined;
-    const page = url.searchParams.get("page") ? Number(url.searchParams.get("page")) : undefined;
-    const pageSize = url.searchParams.get("pageSize") ? Number(url.searchParams.get("pageSize")) : undefined;
-    const chinaAvailableParam = url.searchParams.get("chinaAvailable");
-    const chinaAvailable = chinaAvailableParam === "true" ? true : chinaAvailableParam === "false" ? false : undefined;
-    const lang = url.searchParams.get("lang") ?? "en";
-    const apiUrl = getGraphqlUrl(lang);
-    try {
-      const gqlRes = await proxiedFetch(apiUrl, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          query: `query($query: String, $category: String, $page: Int, $pageSize: Int, $chinaAvailable: Boolean) {
-            skills(query: $query, category: $category, page: $page, pageSize: $pageSize, chinaAvailable: $chinaAvailable) {
-              skills { slug name_en name_zh desc_en desc_zh author version tags labels chinaAvailable stars downloads }
-              total page pageSize
-            }
-          }`,
-          variables: { query, category, page, pageSize, chinaAvailable },
-        }),
-        signal: AbortSignal.timeout(10_000),
-      });
-      if (!gqlRes.ok) {
-        sendJson(res, 502, { error: `GraphQL API returned ${gqlRes.status}` });
-        return true;
-      }
-      const json = (await gqlRes.json()) as { data?: { skills?: unknown } };
-      sendJson(res, 200, json.data?.skills ?? { skills: [], total: 0, page: 1, pageSize: 20 });
-    } catch (err: unknown) {
-      const msg = formatError(err);
-      sendJson(res, 502, { error: msg });
-    }
-    return true;
-  }
-
   if (pathname === "/api/skills/bundled-slugs" && req.method === "GET") {
-    const resolvedVendorDir = vendorDir ?? join(import.meta.dirname, "..", "..", "..", "..", "vendor", "openclaw");
-    const bundledSkillsDir = join(resolvedVendorDir, "skills");
+    const bundledSkillsDir = join(vendorDir, "skills");
     try {
       const entries = await fs.readdir(bundledSkillsDir);
       const slugs: string[] = [];
